@@ -1,0 +1,6 @@
+@VibeGuess.Api_HostAddress = http://localhost:5087
+
+GET {{VibeGuess.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
