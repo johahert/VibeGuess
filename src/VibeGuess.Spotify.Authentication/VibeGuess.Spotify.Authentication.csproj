@@ -8,10 +8,14 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <PackageReference Include="System.Text.Json" Version="9.0.9" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\VibeGuess.Core\VibeGuess.Core.csproj" />
+    <ProjectReference Include="..\VibeGuess.Infrastructure\VibeGuess.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

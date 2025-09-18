@@ -21,6 +21,7 @@ public static class RepositoryServiceExtensions
         services.AddScoped<IQuizRepository, QuizRepository>();
         services.AddScoped<IQuizSessionRepository, QuizSessionRepository>();
         services.AddScoped<ITrackRepository, TrackRepository>();
+        services.AddScoped<ISpotifyTokenRepository, SpotifyTokenRepository>();
 
         // Register unit of work
         services.AddScoped<IUnitOfWork, UnitOfWork>();

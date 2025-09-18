@@ -74,4 +74,13 @@ public class UserRepository : Repository<User>, IUserRepository
             .Include(u => u.SpotifyTokens)
             .FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<SpotifyToken>> GetUserSpotifyTokensAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Set<SpotifyToken>()
+            .Where(t => t.UserId == userId)
+            .OrderByDescending(t => t.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
 }

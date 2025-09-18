@@ -61,4 +61,12 @@ public interface IUserRepository : IRepository<User>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>The user with tokens or null if not found</returns>
     Task<User?> GetWithTokensAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets all Spotify tokens for a user.
+    /// </summary>
+    /// <param name="userId">The user ID</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Collection of Spotify tokens for the user</returns>
+    Task<IEnumerable<SpotifyToken>> GetUserSpotifyTokensAsync(Guid userId, CancellationToken cancellationToken = default);
 }

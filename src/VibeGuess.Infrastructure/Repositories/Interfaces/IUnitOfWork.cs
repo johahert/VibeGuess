@@ -28,6 +28,11 @@ public interface IUnitOfWork : IDisposable
     ITrackRepository Tracks { get; }
 
     /// <summary>
+    /// Gets the Spotify token repository.
+    /// </summary>
+    ISpotifyTokenRepository SpotifyTokens { get; }
+
+    /// <summary>
     /// Saves all changes to the database.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token</param>

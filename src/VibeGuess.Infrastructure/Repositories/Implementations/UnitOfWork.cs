@@ -16,6 +16,7 @@ public class UnitOfWork : IUnitOfWork
     private IQuizRepository? _quizzes;
     private IQuizSessionRepository? _quizSessions;
     private ITrackRepository? _tracks;
+    private ISpotifyTokenRepository? _spotifyTokens;
 
     public UnitOfWork(VibeGuessDbContext context)
     {
@@ -37,6 +38,10 @@ public class UnitOfWork : IUnitOfWork
     /// <inheritdoc />
     public ITrackRepository Tracks =>
         _tracks ??= new TrackRepository(_context);
+
+    /// <inheritdoc />
+    public ISpotifyTokenRepository SpotifyTokens =>
+        _spotifyTokens ??= new SpotifyTokenRepository(_context);
 
     /// <inheritdoc />
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
