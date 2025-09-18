@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using VibeGuess.Infrastructure.Data;
+using VibeGuess.Infrastructure.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +9,9 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddDbContext<VibeGuessDbContext>(options =>
     options.UseSqlServer("Server=(localdb)\\mssqllocaldb;Database=VibeGuessDb;Trusted_Connection=true"));
+
+// Add repositories
+builder.Services.AddRepositories();
 
 var app = builder.Build();
 
