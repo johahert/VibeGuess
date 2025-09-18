@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\VibeGuess.Core\VibeGuess.Core.csproj" />
     <ProjectReference Include="..\VibeGuess.Infrastructure\VibeGuess.Infrastructure.csproj" />
+    <ProjectReference Include="..\VibeGuess.Spotify.Authentication\VibeGuess.Spotify.Authentication.csproj" />
   </ItemGroup>
 
 </Project>
