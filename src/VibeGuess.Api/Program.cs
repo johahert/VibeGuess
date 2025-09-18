@@ -2,6 +2,8 @@
 using VibeGuess.Infrastructure.Data;
 using VibeGuess.Infrastructure.Extensions;
 using VibeGuess.Spotify.Authentication.Extensions;
+using Microsoft.AspNetCore.Authentication;
+using VibeGuess.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +11,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// Add authentication
+builder.Services.AddAuthentication("Test")
+    .AddScheme<AuthenticationSchemeOptions, VibeGuess.Api.Authentication.TestAuthenticationHandler>(
+        "Test", options => { });
+
+builder.Services.AddAuthorization();
 
 // Add database
 builder.Services.AddDbContext<VibeGuessDbContext>(options =>
@@ -29,6 +38,13 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Add error handling middleware
+app.UseMiddleware<ErrorHandlingMiddleware>();
+
+// Add authentication middleware
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Map controllers
 app.MapControllers();
