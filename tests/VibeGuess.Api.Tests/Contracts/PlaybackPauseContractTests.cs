@@ -102,7 +102,7 @@ public class PlaybackPauseContractTests : IClassFixture<WebApplicationFactory<Pr
         var error = JsonSerializer.Deserialize<JsonElement>(responseContent);
         
         Assert.True(error.TryGetProperty("error", out var errorProperty));
-        Assert.Contains("no active playback", error.GetString().ToLower());
+        Assert.Contains("no active playback", errorProperty.GetString().ToLower());
     }
 
     [Fact]
