@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 
 namespace VibeGuess.Api.Middleware;
 
@@ -31,7 +32,20 @@ public class ErrorHandlingMiddleware
         // Handle authentication/authorization responses
         if (context.Response.StatusCode == 401 && !context.Response.HasStarted)
         {
-            await HandleUnauthorizedAsync(context);
+            string failureMessage = "Authentication is required to access this resource";
+            
+            // Check if we have stored authentication failure information
+            if (context.Items.TryGetValue("AuthFailureMessage", out var storedMessage))
+            {
+                failureMessage = storedMessage?.ToString() ?? failureMessage;
+                _logger.LogInformation("Using stored auth failure message: {Message}", failureMessage);
+            }
+            else
+            {
+                _logger.LogInformation("No stored auth failure message found, using default");
+            }
+            
+            await HandleUnauthorizedAsync(context, failureMessage);
         }
     }
 
@@ -51,14 +65,14 @@ public class ErrorHandlingMiddleware
         await context.Response.WriteAsync(jsonResponse);
     }
 
-    private static async Task HandleUnauthorizedAsync(HttpContext context)
+    private static async Task HandleUnauthorizedAsync(HttpContext context, string message = "Authentication is required to access this resource")
     {
         context.Response.ContentType = "application/json";
 
         var response = new
         {
             error = "unauthorized",
-            message = "Authentication is required to access this resource",
+            message = message,
             correlationId = context.TraceIdentifier
         };
 

@@ -42,16 +42,21 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         // Simulate different token scenarios for testing
         if (token.Contains("expired"))
         {
-            return Task.FromResult(AuthenticateResult.Fail("Token expired"));
+            var failureMessage = "The provided token has expired and is no longer valid";
+            Context.Items["AuthFailureMessage"] = failureMessage;
+            Logger.LogInformation("Setting auth failure message for expired token: {Message}", failureMessage);
+            return Task.FromResult(AuthenticateResult.Fail(failureMessage));
         }
         
-        if (token.Contains("invalid") && !token.Contains("InvalidSpotify"))
+        if (token.Contains("invalid") && !token.Contains("invalid.spotify") && !token.Contains("InvalidSpotify"))
         {
-            return Task.FromResult(AuthenticateResult.Fail("Invalid token"));
+            var failureMessage = "Invalid token";
+            Context.Items["AuthFailureMessage"] = failureMessage;
+            return Task.FromResult(AuthenticateResult.Fail(failureMessage));
         }
 
         // Handle tokens that are valid JWT but invalid for Spotify (should result in 403)
-        if (token.Contains("InvalidSpotify") || token.Contains("ButInvalidSpotify"))
+        if (token.Contains("invalid.spotify") || token.Contains("InvalidSpotify") || token.Contains("ButInvalidSpotify"))
         {
             var spotifyClaims = new[]
             {
@@ -80,5 +85,37 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
         
         return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+
+    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
+    {
+        Response.StatusCode = 401;
+        Response.ContentType = "application/json";
+
+        string message = "Authentication is required to access this resource";
+        
+        // Check if we have a stored failure message
+        if (Context.Items.TryGetValue("AuthFailureMessage", out var storedMessage))
+        {
+            message = storedMessage?.ToString() ?? message;
+        }
+
+        string errorCode = "unauthorized";
+        
+        // Use specific error codes based on the failure type
+        if (message.Contains("token", StringComparison.OrdinalIgnoreCase))
+        {
+            errorCode = "invalid_token";
+        }
+        
+        var response = new
+        {
+            error = errorCode,
+            message = message,
+            correlationId = Context.TraceIdentifier
+        };
+
+        var jsonResponse = System.Text.Json.JsonSerializer.Serialize(response);
+        await Response.WriteAsync(jsonResponse);
     }
 }

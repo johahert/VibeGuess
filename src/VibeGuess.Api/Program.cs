@@ -4,6 +4,7 @@ using VibeGuess.Infrastructure.Extensions;
 using VibeGuess.Spotify.Authentication.Extensions;
 using Microsoft.AspNetCore.Authentication;
 using VibeGuess.Api.Middleware;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
