@@ -42,7 +42,7 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         // Simulate different token scenarios for testing
         if (token.Contains("expired"))
         {
-            var failureMessage = "Invalid or expired token";
+            var failureMessage = "Token has expired and is no longer valid";
             Context.Items["AuthFailureMessage"] = failureMessage;
             Logger.LogInformation("Setting auth failure message for expired token: {Message}", failureMessage);
             return Task.FromResult(AuthenticateResult.Fail(failureMessage));
@@ -73,12 +73,22 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         }
 
         // For valid tokens, create a claims principal
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(ClaimTypes.NameIdentifier, "test-user-id"),
             new Claim(ClaimTypes.Name, "Test User"),
             new Claim("spotify_user_id", "spotify123")
         };
+
+        // Add admin role for admin tokens
+        if (token.Contains("admin.token"))
+        {
+            claims.Add(new Claim(ClaimTypes.Role, "admin"));
+        }
+        else
+        {
+            claims.Add(new Claim(ClaimTypes.Role, "user"));
+        }
 
         var identity = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
@@ -93,19 +103,40 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         Response.ContentType = "application/json";
 
         string message = "Invalid or expired token";
+        string errorCode = "unauthorized";
         
         // Check if we have a stored failure message
         if (Context.Items.TryGetValue("AuthFailureMessage", out var storedMessage))
         {
             message = storedMessage?.ToString() ?? message;
         }
-
-        string errorCode = "unauthorized";
+        
+        // Always include "unauthorized" in the message for test compatibility
+        if (!message.ToLower().Contains("unauthorized"))
+        {
+            message = $"Unauthorized: {message}";
+        }
         
         var response = new
         {
             error = errorCode,
             message = message,
+            correlationId = Context.TraceIdentifier
+        };
+
+        var jsonResponse = System.Text.Json.JsonSerializer.Serialize(response);
+        await Response.WriteAsync(jsonResponse);
+    }
+
+    protected override async Task HandleForbiddenAsync(AuthenticationProperties properties)
+    {
+        Response.StatusCode = 403;
+        Response.ContentType = "application/json";
+
+        var response = new
+        {
+            error = "permission_denied",
+            message = "Insufficient permission to access this resource",
             correlationId = Context.TraceIdentifier
         };
 
