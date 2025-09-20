@@ -91,7 +91,7 @@ public class PlaybackDevicesContractTests : IClassFixture<WebApplicationFactory<
         var error = JsonSerializer.Deserialize<JsonElement>(content);
         
         Assert.True(error.TryGetProperty("error", out var errorProperty));
-        Assert.Contains("token", errorProperty.GetString().ToLower());
+        Assert.Contains("unauthorized", errorProperty.GetString().ToLower());
     }
 
     [Fact]

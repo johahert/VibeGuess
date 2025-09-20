@@ -105,7 +105,7 @@ public class HealthSpotifyTestContractTests : IClassFixture<WebApplicationFactor
         Assert.Equal("Failed", statusProperty.GetString());
         Assert.True(testResult.TryGetProperty("details", out var detailsProperty));
         Assert.True(detailsProperty.TryGetProperty("error", out var errorProperty));
-        Assert.Contains("token", errorProperty.GetString().ToLower());
+        Assert.Contains("unauthorized", errorProperty.GetString().ToLower());
     }
 
     [Fact]
