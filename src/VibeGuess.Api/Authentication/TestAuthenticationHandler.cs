@@ -42,7 +42,7 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         // Simulate different token scenarios for testing
         if (token.Contains("expired"))
         {
-            var failureMessage = "The provided token has expired and is no longer valid";
+            var failureMessage = "Invalid or expired token";
             Context.Items["AuthFailureMessage"] = failureMessage;
             Logger.LogInformation("Setting auth failure message for expired token: {Message}", failureMessage);
             return Task.FromResult(AuthenticateResult.Fail(failureMessage));
@@ -50,7 +50,7 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         
         if (token.Contains("invalid") && !token.Contains("invalid.spotify") && !token.Contains("InvalidSpotify"))
         {
-            var failureMessage = "Invalid token";
+            var failureMessage = "Invalid or expired token";
             Context.Items["AuthFailureMessage"] = failureMessage;
             return Task.FromResult(AuthenticateResult.Fail(failureMessage));
         }
@@ -92,7 +92,7 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         Response.StatusCode = 401;
         Response.ContentType = "application/json";
 
-        string message = "Authentication is required to access this resource";
+        string message = "Invalid or expired token";
         
         // Check if we have a stored failure message
         if (Context.Items.TryGetValue("AuthFailureMessage", out var storedMessage))
@@ -101,12 +101,6 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         }
 
         string errorCode = "unauthorized";
-        
-        // Use specific error codes based on the failure type
-        if (message.Contains("token", StringComparison.OrdinalIgnoreCase))
-        {
-            errorCode = "invalid_token";
-        }
         
         var response = new
         {
