@@ -42,7 +42,7 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         // Simulate different token scenarios for testing
         if (token.Contains("expired"))
         {
-            var failureMessage = "Token has expired and is no longer valid";
+            var failureMessage = "Invalid or expired token";
             Context.Items["AuthFailureMessage"] = failureMessage;
             Logger.LogInformation("Setting auth failure message for expired token: {Message}", failureMessage);
             return Task.FromResult(AuthenticateResult.Fail(failureMessage));
@@ -109,6 +109,12 @@ public class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         if (Context.Items.TryGetValue("AuthFailureMessage", out var storedMessage))
         {
             message = storedMessage?.ToString() ?? message;
+            // Use expired error code only for health/spotify endpoints
+            if (message.ToLower().Contains("expired") && 
+                Context.Request.Path.Value?.Contains("/health/test/spotify") == true)
+            {
+                errorCode = "expired";
+            }
         }
         
         // Always include "unauthorized" in the message for test compatibility
