@@ -69,7 +69,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasMany(u => u.QuizSessions)
             .WithOne(qs => qs.User)
             .HasForeignKey(qs => qs.UserId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict); // Avoid multiple cascade paths on SQL Server
 
         builder.HasMany(u => u.SpotifyTokens)
             .WithOne(st => st.User)

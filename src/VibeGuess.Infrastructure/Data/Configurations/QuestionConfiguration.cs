@@ -55,7 +55,7 @@ public class QuestionConfiguration : IEntityTypeConfiguration<Question>
         builder.HasMany(qu => qu.UserAnswers)
             .WithOne(ua => ua.Question)
             .HasForeignKey(ua => ua.QuestionId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict); // Prevent multiple cascade paths to UserAnswers
 
         builder.HasOne(qu => qu.Track)
             .WithMany(t => t.Questions)

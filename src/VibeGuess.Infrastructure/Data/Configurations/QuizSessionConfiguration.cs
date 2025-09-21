@@ -59,7 +59,7 @@ public class QuizSessionConfiguration : IEntityTypeConfiguration<QuizSession>
         builder.HasMany(qs => qs.UserAnswers)
             .WithOne(ua => ua.QuizSession)
             .HasForeignKey(ua => ua.QuizSessionId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict); // Prevent multiple cascade paths to UserAnswers
 
         // Quiz and User relationships are configured in their respective configurations
     }

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using VibeGuess.Infrastructure.Data;
 
@@ -11,9 +12,11 @@ using VibeGuess.Infrastructure.Data;
 namespace VibeGuess.Infrastructure.Migrations
 {
     [DbContext(typeof(VibeGuessDbContext))]
-    partial class VibeGuessDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250921205007_FixCascadePaths")]
+    partial class FixCascadePaths
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -873,13 +876,13 @@ namespace VibeGuess.Infrastructure.Migrations
                     b.HasOne("VibeGuess.Core.Entities.Question", "Question")
                         .WithMany("UserAnswers")
                         .HasForeignKey("QuestionId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("VibeGuess.Core.Entities.QuizSession", "QuizSession")
                         .WithMany("UserAnswers")
                         .HasForeignKey("QuizSessionId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("VibeGuess.Core.Entities.AnswerOption", "SelectedAnswerOption")
