@@ -193,7 +193,7 @@ dotnet build src/VibeGuess.sln
 {
   "Spotify": {
     "ClientId": "your-spotify-client-id",
-    "RedirectUri": "https://localhost:5001/callback"
+    "RedirectUri": "https://localhost:7009/api/auth/spotify/callback"
   },
   "OpenAI": {
     "ApiKey": "your-openai-api-key",
