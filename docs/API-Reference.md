@@ -1,3 +1,40 @@
+# API Reference — Auth (JWT)
+
+This document explains the authentication endpoints and their responses. The API now issues an application JWT for authenticated sessions. The `accessToken` field in responses contains the application JWT (signed with the server secret) and should be used as the Bearer token in subsequent API calls.
+
+## POST /api/auth/spotify/callback
+Exchanges a Spotify authorization code for Spotify tokens, persists the user and tokens, and returns an application JWT.
+
+Example success response:
+
+{
+  "accessToken": "<APPLICATION_JWT>",
+  "refreshToken": "<SPOTIFY_REFRESH_TOKEN>",
+  "expiresIn": 3600,
+  "tokenType": "Bearer",
+  "user": { /* user profile */ }
+}
+
+Notes:
+- `accessToken` should be used as `Authorization: Bearer <APPLICATION_JWT>` in subsequent API requests.
+- `refreshToken` is still the Spotify refresh token; it may be used to refresh Spotify tokens. The API's `/api/auth/refresh` endpoint will accept this refresh token and return a new application JWT.
+
+## POST /api/auth/refresh
+Accepts a JSON body with `refreshToken` and exchanges it with Spotify for new tokens. The server updates stored Spotify tokens and responds with a new application JWT in `accessToken`.
+
+Example success response:
+
+{
+  "accessToken": "<NEW_APPLICATION_JWT>",
+  "refreshToken": "<NEW_SPOTIFY_REFRESH_TOKEN>",
+  "expiresIn": 3600,
+  "tokenType": "Bearer"
+}
+
+If the server cannot map the refresh token to a user (unexpected), it will fall back to returning the raw Spotify tokens in the same shape as older responses.
+
+Security:
+- The application JWT is signed with the server secret configured under `Jwt:Secret` in configuration. For production, store the secret in a secure secret store or environment variable and use strong key material. Rotate keys periodically.
 # VibeGuess API Reference
 
 > Complete API documentation for frontend development

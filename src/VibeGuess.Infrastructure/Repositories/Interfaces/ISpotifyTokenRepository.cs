@@ -29,4 +29,12 @@ public interface ISpotifyTokenRepository : IRepository<SpotifyToken>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Collection of tokens that need refresh</returns>
     Task<IEnumerable<SpotifyToken>> GetTokensNeedingRefreshAsync(int minutesBeforeExpiry = 5, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets a Spotify token record by its refresh token value.
+    /// </summary>
+    /// <param name="refreshToken">The refresh token value</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Matching SpotifyToken or null</returns>
+    Task<SpotifyToken?> GetByRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default);
 }

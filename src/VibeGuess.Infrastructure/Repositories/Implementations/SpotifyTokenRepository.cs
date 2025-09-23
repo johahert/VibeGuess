@@ -45,4 +45,15 @@ public class SpotifyTokenRepository : Repository<SpotifyToken>, ISpotifyTokenRep
             .Where(t => t.IsActive && t.ExpiresAt <= refreshThreshold)
             .ToListAsync(cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<SpotifyToken?> GetByRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken)) return null;
+
+        return await _dbSet
+            .Where(t => t.IsActive && t.RefreshToken == refreshToken)
+            .OrderByDescending(t => t.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 }

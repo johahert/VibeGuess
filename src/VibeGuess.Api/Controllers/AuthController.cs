@@ -19,15 +19,18 @@ public class AuthController : BaseApiController
     private readonly ISpotifyAuthenticationService _spotifyAuth;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ILogger<AuthController> _logger;
+    private readonly VibeGuess.Api.Security.IJwtService _jwtService;
 
     public AuthController(
         ISpotifyAuthenticationService spotifyAuth,
         IUnitOfWork unitOfWork,
-        ILogger<AuthController> logger)
+        ILogger<AuthController> logger,
+        VibeGuess.Api.Security.IJwtService jwtService)
     {
         _spotifyAuth = spotifyAuth;
         _unitOfWork = unitOfWork;
         _logger = logger;
+        _jwtService = jwtService;
     }
 
     /// <summary>
@@ -219,14 +222,16 @@ public class AuthController : BaseApiController
                 // Store Spotify tokens for future API calls
                 await _spotifyAuth.StoreUserTokensAsync(user.Id, tokenResponse);
 
-                // TODO: Generate JWT token for application authentication
-                // For now, return Spotify access token directly (will need JWT service later)
+                // Generate application JWT token for the user
+                string appJwt = _jwtService.GenerateToken(user.Id.ToString(), user.SpotifyUserId);
+
                 var response = new SpotifyCallbackResponse
                 {
-                    AccessToken = tokenResponse.AccessToken, // TODO: Replace with JWT
+                    // accessToken now contains the application JWT
+                    AccessToken = appJwt,
                     RefreshToken = tokenResponse.RefreshToken,
                     ExpiresIn = tokenResponse.ExpiresIn,
-                    TokenType = tokenResponse.TokenType,
+                    TokenType = "Bearer",
                     User = new UserProfileResponse
                     {
                         Id = user.SpotifyUserId,
@@ -237,7 +242,7 @@ public class AuthController : BaseApiController
                         ProfileImageUrl = user.ProfileImageUrl
                     }
                 };
-
+                _logger.LogInformation($"Response: {response}");
                 _logger.LogInformation("Successfully completed OAuth callback for user: {UserId}", user.Id);
                 return OkWithHeaders(response);
             }
@@ -329,18 +334,52 @@ public class AuthController : BaseApiController
             try
             {
                 var newTokens = await _spotifyAuth.RefreshAccessTokenAsync(refreshToken);
-                
-                // TODO: Generate new JWT token for application authentication
-                // For now, return Spotify tokens directly (will need JWT service later)
+
+                // Find the user by stored Spotify token (or other mapping). We'll assume RefreshAccessTokenAsync returns sufficient info
+                // Update stored tokens in DB for the user
+                var stored = await _unitOfWork.SpotifyTokens.GetByRefreshTokenAsync(refreshToken);
+                if (stored != null)
+                {
+                    stored.AccessToken = newTokens.AccessToken;
+                    stored.RefreshToken = newTokens.RefreshToken ?? stored.RefreshToken;
+                    stored.ExpiresAt = DateTime.UtcNow.AddSeconds(newTokens.ExpiresIn);
+                    await _unitOfWork.SaveChangesAsync();
+                }
+
+                // Issue new application JWT for the user (lookup user)
+                string appJwt = null!;
+                if (stored != null)
+                {
+                    var user = await _unitOfWork.Users.GetByIdAsync(stored.UserId);
+                    if (user != null)
+                    {
+                        appJwt = _jwtService.GenerateToken(user.Id.ToString(), user.SpotifyUserId);
+                    }
+                }
+
+                // Fallback: if we couldn't find the stored token/user, still return Spotify tokens (but warn)
+                if (string.IsNullOrWhiteSpace(appJwt))
+                {
+                    _logger.LogWarning("Could not issue application JWT during refresh - returning Spotify tokens as fallback");
+                    var responseFallback = new
+                    {
+                        accessToken = newTokens.AccessToken,
+                        refreshToken = newTokens.RefreshToken,
+                        expiresIn = newTokens.ExpiresIn,
+                        tokenType = newTokens.TokenType
+                    };
+                    return OkWithHeaders(responseFallback);
+                }
+
                 var response = new
                 {
-                    accessToken = newTokens.AccessToken, // TODO: Replace with JWT
+                    accessToken = appJwt,
                     refreshToken = newTokens.RefreshToken,
                     expiresIn = newTokens.ExpiresIn,
-                    tokenType = newTokens.TokenType
+                    tokenType = "Bearer"
                 };
 
-                _logger.LogInformation("Successfully refreshed access token");
+                _logger.LogInformation("Successfully refreshed access token and issued new application JWT");
                 return OkWithHeaders(response);
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("Failed to refresh access token"))
