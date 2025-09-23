@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using VibeGuess.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
+using VibeGuess.Api.Services.OpenAI;
+using System.Text.Json;
 
 namespace VibeGuess.Api.Controllers;
 
@@ -14,11 +16,13 @@ public class HealthController : BaseApiController
 {
     private readonly VibeGuessDbContext _dbContext;
     private readonly ILogger<HealthController> _logger;
+    private readonly IOpenAIHealthService _openAIHealthService;
 
-    public HealthController(VibeGuessDbContext dbContext, ILogger<HealthController> logger)
+    public HealthController(VibeGuessDbContext dbContext, ILogger<HealthController> logger, IOpenAIHealthService openAIHealthService)
     {
         _dbContext = dbContext;
         _logger = logger;
+        _openAIHealthService = openAIHealthService;
     }
 
     /// <summary>
@@ -56,7 +60,7 @@ public class HealthController : BaseApiController
                     ["status"] = c.Status,
                     ["duration"] = c.Duration,
                     ["description"] = c.Description,
-                    ["data"] = c.Data
+                    ["data"] = c.Data ?? new { }
                 }).ToArray()
             };
 
@@ -260,7 +264,7 @@ public class HealthController : BaseApiController
     /// </summary>
     [HttpPost("test/openai")]
     [Microsoft.AspNetCore.Authorization.Authorize]
-    public IActionResult TestOpenAIConnection([FromBody] System.Text.Json.JsonElement? requestBody = null)
+    public async Task<IActionResult> TestOpenAIConnection([FromBody] System.Text.Json.JsonElement? requestBody = null)
     {
         var startTime = DateTime.UtcNow;
         
@@ -268,19 +272,14 @@ public class HealthController : BaseApiController
         {
             // Parse request body flags
             bool includeExtendedDiagnostics = false;
-            bool forceInvalidKey = false;
             bool runGenerationTest = false;
             string? testPrompt = null;
 
-            if (requestBody.HasValue)
+            if (requestBody.HasValue && requestBody.Value.ValueKind == JsonValueKind.Object)
             {
                 if (requestBody.Value.TryGetProperty("includeExtendedDiagnostics", out var extendedProp))
                 {
                     includeExtendedDiagnostics = extendedProp.GetBoolean();
-                }
-                if (requestBody.Value.TryGetProperty("forceInvalidKey", out var invalidKeyProp))
-                {
-                    forceInvalidKey = invalidKeyProp.GetBoolean();
                 }
                 if (requestBody.Value.TryGetProperty("runGenerationTest", out var generationProp))
                 {
@@ -306,16 +305,16 @@ public class HealthController : BaseApiController
                     });
                 }
             }
+
+            // Use real OpenAI service to check health
+            var healthResult = await _openAIHealthService.CheckHealthAsync(runGenerationTest, testPrompt ?? "Reply to this with 'pong'.");
             
             var duration = (DateTime.UtcNow - startTime).TotalMilliseconds;
-            
-            // Determine status based on flags
-            var status = forceInvalidKey ? "Failed" : "Connected";
             
             var response = new Dictionary<string, object>
             {
                 ["service"] = "openai",
-                ["status"] = status,
+                ["status"] = healthResult.IsHealthy ? "Connected" : "Failed",
                 ["timestamp"] = DateTime.UtcNow.ToString("o"),
                 ["duration"] = $"{duration:F1}ms"
             };
@@ -327,37 +326,30 @@ public class HealthController : BaseApiController
                 ["region"] = "US"
             };
 
-            if (forceInvalidKey)
+            if (!healthResult.IsHealthy)
             {
-                details["error"] = "OpenAI API key validation failed - invalid api key";
+                details["error"] = healthResult.ErrorMessage ?? "Unknown error occurred";
             }
             else
             {
                 // Add required details for connected status
-                details["modelVersion"] = "gpt-4-turbo";
-                details["responseTime"] = $"{duration + 50:F1}ms";
+                details["modelVersion"] = healthResult.ModelVersion ?? "unknown";
+                details["responseTime"] = $"{healthResult.ResponseTimeMs:F1}ms";
             }
 
             // Add extended diagnostics if admin user requested them
-            if (includeExtendedDiagnostics && !forceInvalidKey)
+            if (includeExtendedDiagnostics && healthResult.IsHealthy && healthResult.ExtendedDiagnostics != null)
             {
-                details["apiVersion"] = "v1.2.3";
-                details["rateLimitInfo"] = new { remaining = 100, resetTime = DateTime.UtcNow.AddHours(1).ToString("o") };
-                details["lastRequestTime"] = DateTime.UtcNow.AddMinutes(-2).ToString("o");
-                details["tokenUsage"] = new { dailyTokens = 5000, monthlyTokens = 150000 };
+                foreach (var kvp in healthResult.ExtendedDiagnostics)
+                {
+                    details[kvp.Key] = kvp.Value;
+                }
             }
 
-            // Add generation test if requested
-            if (runGenerationTest && !forceInvalidKey)
+            // Add generation test results if they were requested and available
+            if (runGenerationTest && healthResult.GenerationTest != null)
             {
-                var testResponse = "What band released the album 'Dark Side of the Moon'?";
-                details["generationTest"] = new
-                {
-                    success = true,
-                    responseLength = testResponse.Length,
-                    tokenCount = 15,
-                    prompt = testPrompt
-                };
+                details["generationTest"] = healthResult.GenerationTest;
             }
 
             response["details"] = details;

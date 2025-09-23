@@ -78,6 +78,11 @@ builder.Services.AddCors(options =>
 builder.Services.Configure<VibeGuess.Api.Security.JwtSettings>(builder.Configuration.GetSection("Jwt"));
 builder.Services.AddSingleton<VibeGuess.Api.Security.IJwtService, VibeGuess.Api.Security.JwtService>();
 
+// Configure OpenAI settings and service
+builder.Services.Configure<VibeGuess.Api.Services.OpenAI.OpenAISettings>(builder.Configuration.GetSection("OpenAI"));
+builder.Services.AddHttpClient(); // Required for OpenAI service HTTP calls
+builder.Services.AddSingleton<VibeGuess.Api.Services.OpenAI.IOpenAIHealthService, VibeGuess.Api.Services.OpenAI.OpenAIHealthService>();
+
 // Add authentication: register both Test scheme (for integration tests) and JWT Bearer
 var isTestEnv = string.Equals(builder.Environment.EnvironmentName, "Test", StringComparison.OrdinalIgnoreCase);
 if (isTestEnv)
