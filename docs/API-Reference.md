@@ -43,6 +43,29 @@ Security:
 **Authentication**: Bearer Token (JWT)  
 **Content-Type**: `application/json`
 
+## 🔐 Authentication Overview
+
+VibeGuess uses JWT (JSON Web Token) authentication for API access. The authentication flow integrates with Spotify OAuth 2.0 to authenticate users and then issues application JWTs for subsequent API requests.
+
+**Authentication Flow:**
+1. **Login**: Initiate Spotify OAuth flow
+2. **Callback**: Exchange Spotify auth code for application JWT
+3. **API Access**: Use JWT as Bearer token in Authorization headers
+4. **Refresh**: Exchange Spotify refresh token for new JWT when expired
+
+**JWT Format:**
+- **Header**: `Authorization: Bearer <JWT>`
+- **Payload**: Contains user ID, Spotify user ID, and expiration
+- **Security**: Signed with server secret, expires in 1 hour
+
+**Security Notes:**
+- JWTs are stateless and contain user identity claims
+- Server validates JWT signature on each request
+- Refresh tokens are Spotify-issued and stored securely
+- All endpoints except health checks require valid JWT
+
+---
+
 ## 🔐 Authentication Endpoints
 
 ### 1. Initiate Spotify Login
@@ -94,7 +117,7 @@ Exchanges authorization code for tokens and user profile.
 **Response (200):**
 ```json
 {
-  "accessToken": "BQC6FX_L9...",
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "refreshToken": "AQC7j2k...",
   "expiresIn": 3600,
   "tokenType": "Bearer",
@@ -108,6 +131,11 @@ Exchanges authorization code for tokens and user profile.
   }
 }
 ```
+
+**Notes:**
+- `accessToken` is an application JWT (not a Spotify token) - use this as `Authorization: Bearer <JWT>` for API requests
+- `refreshToken` is the Spotify refresh token for refreshing sessions
+- JWT contains user identity and is signed with the server secret
 
 **Error Responses:**
 - `400` - Invalid authorization code/verifier
@@ -131,12 +159,17 @@ Refreshes expired access tokens.
 **Response (200):**
 ```json
 {
-  "accessToken": "new.access.token.jwt",
-  "refreshToken": "new.refresh.token",
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "AQC7j2k...",
   "expiresIn": 3600,
   "tokenType": "Bearer"
 }
 ```
+
+**Notes:**
+- `accessToken` is a new application JWT for API access
+- `refreshToken` is the updated Spotify refresh token
+- Use the JWT in Authorization headers for subsequent requests
 
 **Error Responses:**
 - `401` - Invalid/expired refresh token
@@ -159,6 +192,7 @@ Refreshes expired access tokens.
     "email": "john@example.com",
     "hasSpotifyPremium": true,
     "country": "US",
+    "profileImageUrl": "https://i.scdn.co/image/...",
     "createdAt": "2025-09-15T10:00:00Z",
     "lastLoginAt": "2025-09-21T14:30:00Z"
   },
@@ -437,6 +471,61 @@ Refreshes expired access tokens.
 
 ---
 
+### 14. Test OpenAI Connection
+
+**POST** `/health/test/openai`
+
+Tests connectivity to OpenAI API and validates AI generation capabilities.
+
+**Request Body:**
+```json
+{
+  "includeExtendedDiagnostics": false,
+  "runGenerationTest": true,
+  "testPrompt": "Reply to this with 'pong'."
+}
+```
+
+**Parameters:**
+- `includeExtendedDiagnostics` (boolean): Include detailed diagnostics (requires admin role)
+- `runGenerationTest` (boolean): Test actual AI text generation
+- `testPrompt` (string, optional): Custom prompt for generation test
+
+**Response (200):**
+```json
+{
+  "service": "openai",
+  "status": "Connected",
+  "timestamp": "2025-09-24T14:57:43Z",
+  "duration": "2752.5ms",
+  "details": {
+    "apiUrl": "https://api.openai.com",
+    "region": "US",
+    "modelVersion": "gpt-4o-mini",
+    "responseTime": "538.3ms",
+    "generationTest": {
+      "success": true,
+      "responseLength": 4,
+      "prompt": "Reply to this with 'pong'.",
+      "response": "pong",
+      "error": ""
+    }
+  }
+}
+```
+
+**Response (503) - Service Unavailable:**
+```json
+{
+  "service": "openai", 
+  "status": "Unhealthy",
+  "error": "Failed to connect to OpenAI API",
+  "lastChecked": "2025-09-21T14:30:00Z"
+}
+```
+
+---
+
 ## 🔗 Common Response Headers
 
 All endpoints include these headers:
@@ -505,6 +594,15 @@ class VibeGuessAPI {
     });
     return response.json();
   }
+
+  async refreshToken(refreshToken: string) {
+    const response = await fetch(`${this.baseUrl}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken })
+    });
+    return response.json();
+  }
 }
 ```
 
@@ -526,7 +624,22 @@ const code = urlParams.get('code');
 const storedVerifier = localStorage.getItem('codeVerifier');
 
 const tokens = await api.callback(code, storedVerifier, redirectUri);
+// Store JWT for API access
 localStorage.setItem('accessToken', tokens.accessToken);
+// Store Spotify refresh token for session renewal
+localStorage.setItem('refreshToken', tokens.refreshToken);
+
+// 4. Refresh JWT when needed (e.g., on 401 responses)
+async function refreshAccessToken() {
+  const refreshToken = localStorage.getItem('refreshToken');
+  if (!refreshToken) throw new Error('No refresh token available');
+  
+  const newTokens = await api.refreshToken(refreshToken);
+  localStorage.setItem('accessToken', newTokens.accessToken);
+  localStorage.setItem('refreshToken', newTokens.refreshToken);
+  
+  return newTokens.accessToken;
+}
 ```
 
 ---

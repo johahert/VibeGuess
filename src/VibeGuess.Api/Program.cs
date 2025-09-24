@@ -83,6 +83,9 @@ builder.Services.Configure<VibeGuess.Api.Services.OpenAI.OpenAISettings>(builder
 builder.Services.AddHttpClient(); // Required for OpenAI service HTTP calls
 builder.Services.AddSingleton<VibeGuess.Api.Services.OpenAI.IOpenAIHealthService, VibeGuess.Api.Services.OpenAI.OpenAIHealthService>();
 
+// Configure Quiz Generation Service
+builder.Services.AddScoped<VibeGuess.Api.Services.Quiz.IQuizGenerationService, VibeGuess.Api.Services.Quiz.QuizGenerationService>();
+
 // Add authentication: register both Test scheme (for integration tests) and JWT Bearer
 var isTestEnv = string.Equals(builder.Environment.EnvironmentName, "Test", StringComparison.OrdinalIgnoreCase);
 if (isTestEnv)

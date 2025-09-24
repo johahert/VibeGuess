@@ -1,5 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using VibeGuess.Api.Services.Quiz;
+using VibeGuess.Infrastructure.Repositories.Interfaces;
+using VibeGuess.Core.Entities;
+using System.Security.Claims;
 
 namespace VibeGuess.Api.Controllers;
 
@@ -13,23 +17,30 @@ namespace VibeGuess.Api.Controllers;
 public partial class QuizController : BaseApiController
 {
     private readonly ILogger<QuizController> _logger;
+    private readonly IQuizGenerationService _quizGenerationService;
+    private readonly IUnitOfWork _unitOfWork;
     private static readonly Dictionary<string, DateTime> ActiveSessions = new();
 
-    public QuizController(ILogger<QuizController> logger)
+    public QuizController(
+        ILogger<QuizController> logger,
+        IQuizGenerationService quizGenerationService,
+        IUnitOfWork unitOfWork)
     {
         _logger = logger;
+        _quizGenerationService = quizGenerationService;
+        _unitOfWork = unitOfWork;
     }
 
     /// <summary>
-    /// Generate a new music quiz based on user prompt.
-    /// TDD GREEN: Hardcoded response matching API contract.
+    /// Generate a new music quiz based on user prompt using real AI integration.
     /// </summary>
     [HttpPost("generate")]
-    public IActionResult GenerateQuiz([FromBody] QuizGenerateRequest request)
+    public async Task<IActionResult> GenerateQuiz([FromBody] QuizGenerateRequest request)
     {
         try
         {
             _logger.LogInformation("GenerateQuiz called with request: {Request}", System.Text.Json.JsonSerializer.Serialize(request));
+            
             // Add correlation ID from request header to response
             if (Request.Headers.TryGetValue("X-Correlation-ID", out var correlationId))
             {
@@ -45,11 +56,43 @@ public partial class QuizController : BaseApiController
             if (validationResult != null)
                 return validationResult;
 
-            // TDD GREEN: Return hardcoded success response matching API contract
-            var quizResponse = CreateHardcodedQuizResponse(request);
+            // Get user ID from JWT claims
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+            if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var userId))
+            {
+                _logger.LogWarning("Could not extract user ID from JWT claims. Available claims: {Claims}", 
+                    string.Join(", ", User.Claims.Select(c => $"{c.Type}={c.Value}")));
+                return Unauthorized(CreateErrorResponse("invalid_token", "Invalid user token"));
+            }
+
+            // Generate quiz using AI service
+            var generationRequest = new VibeGuess.Api.Services.Quiz.QuizGenerationRequest
+            {
+                Prompt = request.Prompt,
+                QuestionCount = request.QuestionCount,
+                Format = request.Format ?? "MultipleChoice",
+                Difficulty = request.Difficulty ?? "Medium",
+                IncludeAudio = request.IncludeAudio ?? true,
+                Language = request.Language ?? "en"
+            };
+
+            var generationResult = await _quizGenerationService.GenerateQuizAsync(generationRequest, userId);
             
-            _logger.LogInformation("Quiz generation successful for prompt: {Prompt}", request.Prompt);
-            
+            if (!generationResult.Success || generationResult.Quiz == null)
+            {
+                _logger.LogError("Quiz generation failed: {Error}", generationResult.ErrorMessage);
+                return StatusCode(500, CreateErrorResponse("generation_failed", generationResult.ErrorMessage ?? "Failed to generate quiz"));
+            }
+
+            // Save the quiz to the database
+            await _unitOfWork.Quizzes.AddAsync(generationResult.Quiz);
+            await _unitOfWork.SaveChangesAsync();
+
+            _logger.LogInformation("Quiz generation successful. Quiz ID: {QuizId}, Questions: {QuestionCount}", 
+                generationResult.Quiz.Id, generationResult.Quiz.Questions.Count);
+
+            // Return the quiz response
+            var quizResponse = CreateQuizResponse(generationResult.Quiz, generationResult.Metadata);
             return Ok(quizResponse);
         }
         catch (Exception ex)
@@ -116,6 +159,60 @@ public partial class QuizController : BaseApiController
         }
 
         return null;
+    }
+
+    private object CreateQuizResponse(VibeGuess.Core.Entities.Quiz quiz, VibeGuess.Api.Services.Quiz.QuizGenerationMetadata? metadata)
+    {
+        return new
+        {
+            quiz = new
+            {
+                id = quiz.Id.ToString(),
+                title = quiz.Title,
+                userPrompt = quiz.UserPrompt,
+                format = quiz.Format,
+                difficulty = quiz.Difficulty,
+                questionCount = quiz.QuestionCount,
+                createdAt = quiz.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                expiresAt = quiz.ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                status = quiz.Status,
+                questions = quiz.Questions.Select((q, index) => new
+                {
+                    id = q.Id.ToString(),
+                    orderIndex = q.OrderIndex,
+                    questionText = q.QuestionText,
+                    type = q.Type,
+                    requiresAudio = q.RequiresAudio,
+                    points = q.Points,
+                    hint = q.HintText,
+                    track = q.Track != null ? new
+                    {
+                        spotifyTrackId = q.Track.SpotifyTrackId,
+                        name = q.Track.Name,
+                        artistName = q.Track.ArtistName,
+                        albumName = q.Track.AlbumName,
+                        durationMs = q.Track.DurationMs,
+                        previewUrl = q.Track.PreviewUrl,
+                        isPlayable = !string.IsNullOrEmpty(q.Track.PreviewUrl)
+                    } : null,
+                    answerOptions = q.AnswerOptions.OrderBy(ao => ao.OrderIndex).Select(ao => new
+                    {
+                        id = ao.Id.ToString(),
+                        orderIndex = ao.OrderIndex,
+                        optionText = ao.AnswerText,
+                        isCorrect = ao.IsCorrect
+                    }).ToArray()
+                }).ToArray()
+            },
+            generationMetadata = metadata != null ? new
+            {
+                processingTimeMs = metadata.ProcessingTimeMs,
+                aiModel = metadata.AiModel,
+                tracksFound = metadata.TracksFound,
+                tracksValidated = metadata.TracksValidated,
+                tracksFailed = metadata.TracksFailed
+            } : null
+        };
     }
 
     private object CreateHardcodedQuizResponse(QuizGenerateRequest request)
