@@ -4,6 +4,7 @@ using VibeGuess.Api.Services.Quiz;
 using VibeGuess.Infrastructure.Repositories.Interfaces;
 using VibeGuess.Core.Entities;
 using System.Security.Claims;
+using Microsoft.EntityFrameworkCore;
 
 namespace VibeGuess.Api.Controllers;
 
@@ -318,12 +319,11 @@ public partial class QuizController : BaseApiController
     }
 
     /// <summary>
-    /// Retrieve a specific quiz by ID.
-    /// TDD GREEN: Hardcoded response matching API contract and test expectations.
+    /// Retrieve a specific quiz by ID from the database.
     /// </summary>
     [AllowAnonymous]
     [HttpGet("{quizId}")]
-    public IActionResult GetQuiz(string quizId)
+    public async Task<IActionResult> GetQuiz(string quizId)
     {
         try
         {
@@ -355,131 +355,115 @@ public partial class QuizController : BaseApiController
                 }
             }
 
-            // TDD GREEN: Deterministic routing for specific test GUIDs
-            var hasAuthHeader = Request.Headers.ContainsKey("Authorization");
-            var authHeader = hasAuthHeader ? Request.Headers["Authorization"].ToString() : string.Empty;
+            // Fetch quiz from database
+            var quiz = await _unitOfWork.Quizzes.GetWithQuestionsAsync(parsedQuizId);
             
-            // Handle expired tokens first - always return 401
-            if (hasAuthHeader && authHeader.Contains("expired"))
+            if (quiz == null)
             {
-                return Unauthorized(new 
-                {
-                    error = "unauthorized", 
-                    message = "Token has expired and is no longer valid",
-                    correlationId = HttpContext.TraceIdentifier
-                });
+                return NotFound(CreateErrorResponse(
+                    "not_found",
+                    "Quiz not found or has expired"
+                ));
             }
-            
-            // TDD GREEN: Probabilistic responses for test compatibility
-            // Pattern: 3 no-auth tests (expect 200, 404, 401) + 1 auth test (expect 200)
-            
-            var guidHash = parsedQuizId.GetHashCode();
-            
-            if (!hasAuthHeader)
+
+            // Check if quiz is expired
+            if (quiz.IsExpired)
             {
-                // Balanced approach: Equal chances for each scenario
-                var noAuthMod = Math.Abs(guidHash % 6);
-                
-                if (noAuthMod == 0) // ~17% chance for 401 (WithoutAuthentication test)
+                return NotFound(CreateErrorResponse(
+                    "not_found",
+                    "Quiz has expired"
+                ));
+            }
+
+            // Check authorization for private quizzes
+            var hasAuthHeader = Request.Headers.ContainsKey("Authorization");
+            var isOwner = false;
+            
+            if (hasAuthHeader)
+            {
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+                if (userIdClaim != null && Guid.TryParse(userIdClaim.Value, out var userId))
                 {
-                    return Unauthorized(new 
-                    {
-                        error = "unauthorized",
-                        message = "Unauthorized: Missing Authorization header",
-                        correlationId = HttpContext.TraceIdentifier
-                    });
+                    isOwner = quiz.UserId == userId;
                 }
-                else if (noAuthMod == 1) // ~17% chance for 404 (WithNonExistentId test)
+            }
+
+            // If quiz is private and user is not the owner, require authentication
+            if (!quiz.IsPublic && !isOwner)
+            {
+                if (!hasAuthHeader)
                 {
-                    return NotFound(CreateErrorResponse(
-                        "not_found",
-                        "Quiz not found or has expired"
+                    return Unauthorized(CreateErrorResponse(
+                        "unauthorized",
+                        "Authentication required for private quiz"
                     ));
                 }
-                // Remaining ~66% continue to success (WithValidId test + ValidAuthentication needs)
+                else
+                {
+                    return StatusCode(403, CreateErrorResponse(
+                        "forbidden",
+                        "Access denied to private quiz"
+                    ));
+                }
             }
-            
-            // Auth requests and remaining no-auth requests proceed to success response
 
-            // TDD GREEN: Return hardcoded quiz response matching both contract and test expectations
+            // Build quiz response with real data
             var quizResponse = new
             {
-                    id = parsedQuizId.ToString(),
-                    title = "80s Rock Bands Quiz",
-                    userPrompt = "Create a quiz about 80s rock bands and their hit songs",
-                    format = "MultipleChoice",
-                    difficulty = "Medium",
-                    questionCount = 10,
-                    createdAt = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-ddTHH:mm:ssZ"),
-                    expiresAt = DateTime.UtcNow.AddDays(29).ToString("yyyy-MM-ddTHH:mm:ssZ"),
-                    status = "Generated",
-                    
-                    // Test-expected properties
-                    description = "Test your knowledge of 80s rock bands and their iconic songs",
-                    estimatedDuration = 600, // 10 minutes in seconds
-                    userProgress = new
+                id = quiz.Id.ToString(),
+                title = quiz.Title,
+                userPrompt = quiz.UserPrompt,
+                format = quiz.Format,
+                difficulty = quiz.Difficulty,
+                questionCount = quiz.QuestionCount,
+                createdAt = quiz.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                expiresAt = quiz.ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                status = quiz.Status,
+                
+                // Additional properties for compatibility
+                description = $"A {quiz.Difficulty.ToLower()} difficulty quiz about music",
+                estimatedDuration = quiz.QuestionCount * 60, // 1 minute per question
+                userProgress = new
+                {
+                    completed = false,
+                    score = (object?)null,
+                    currentQuestion = 0
+                },
+                canEdit = isOwner,
+                isBookmarked = false,
+                isPublic = quiz.IsPublic,
+                playCount = quiz.PlayCount,
+                averageScore = quiz.AverageScore,
+                tags = string.IsNullOrEmpty(quiz.Tags) ? new string[0] : quiz.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries),
+                
+                questions = quiz.Questions.OrderBy(q => q.OrderIndex).Select(q => new
+                {
+                    id = q.Id.ToString(),
+                    orderIndex = q.OrderIndex,
+                    questionText = q.QuestionText,
+                    type = q.Type,
+                    requiresAudio = q.RequiresAudio,
+                    points = q.Points,
+                    hint = q.HintText,
+                    explanation = q.Explanation,
+                    track = q.Track != null ? new
                     {
-                        completed = false,
-                        score = (object?)null,
-                        currentQuestion = 0
-                    },
-                    canEdit = true,
-                    isBookmarked = false,
-                    
-                    questions = new[]
+                        spotifyTrackId = q.Track.SpotifyTrackId,
+                        name = q.Track.Name,
+                        artistName = q.Track.ArtistName,
+                        albumName = q.Track.AlbumName,
+                        durationMs = q.Track.DurationMs,
+                        previewUrl = q.Track.PreviewUrl,
+                        isPlayable = !string.IsNullOrEmpty(q.Track.PreviewUrl)
+                    } : null,
+                    answerOptions = q.AnswerOptions.OrderBy(ao => ao.OrderIndex).Select(ao => new
                     {
-                        new
-                        {
-                            id = Guid.NewGuid().ToString(),
-                            orderIndex = 1,
-                            questionText = "Which band released the hit song 'Don't Stop Believin'' in 1981?",
-                            type = "MultipleChoice",
-                            requiresAudio = true,
-                            points = 1,
-                            hint = "This band was formed in San Francisco",
-                            track = new
-                            {
-                                spotifyTrackId = "4VqPOruhp5EdPBeR92t6lQ",
-                                name = "Don't Stop Believin'",
-                                artistName = "Journey",
-                                albumName = "Escape",
-                                durationMs = 251000,
-                                previewUrl = "https://p.scdn.co/mp3-preview/hardcoded-for-tests",
-                                isPlayable = true
-                            },
-                            answerOptions = new[]
-                            {
-                                new
-                                {
-                                    id = Guid.NewGuid().ToString(),
-                                    orderIndex = 1,
-                                    optionText = "Journey",
-                                    isCorrect = true
-                                },
-                                new
-                                {
-                                    id = Guid.NewGuid().ToString(),
-                                    orderIndex = 2,
-                                    optionText = "Foreigner",
-                                    isCorrect = false
-                                },
-                                new
-                                {
-                                    id = Guid.NewGuid().ToString(),
-                                    orderIndex = 3,
-                                    optionText = "REO Speedwagon",
-                                    isCorrect = false
-                                },
-                                new
-                                {
-                                    id = Guid.NewGuid().ToString(),
-                                    orderIndex = 4,
-                                    optionText = "Boston",
-                                    isCorrect = false
-                                }
-                            }
-                        }
-                    }
+                        id = ao.Id.ToString(),
+                        orderIndex = ao.OrderIndex,
+                        optionText = ao.AnswerText,
+                        isCorrect = ao.IsCorrect
+                    }).ToArray()
+                }).ToArray()
             };
 
             // Add ETag for caching support
@@ -497,11 +481,10 @@ public partial class QuizController : BaseApiController
     }
 
     /// <summary>
-    /// Get user's quiz history with pagination and filtering.
-    /// TDD GREEN: Hardcoded quiz list matching API contract.
+    /// Get user's quiz history with pagination and filtering from the database.
     /// </summary>
     [HttpGet("my-quizzes")]
-    public IActionResult GetMyQuizzes(
+    public async Task<IActionResult> GetMyQuizzes(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10,
         [FromQuery] string? status = null,
@@ -526,10 +509,18 @@ public partial class QuizController : BaseApiController
             if (validationResult != null)
                 return validationResult;
 
-            // TDD GREEN: Return hardcoded quiz history matching API contract
-            var quizzesResponse = CreateHardcodedQuizHistory(page, pageSize, status, difficulty, sortBy, sortOrder);
+            // Get user ID from JWT claims
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+            if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var userId))
+            {
+                _logger.LogWarning("Could not extract user ID from JWT claims for quiz history request");
+                return Unauthorized(CreateErrorResponse("invalid_token", "Invalid user token"));
+            }
+
+            // Fetch real quiz history from database
+            var quizzesResponse = await GetRealQuizHistory(userId, page, pageSize, status, difficulty, sortBy, sortOrder);
             
-            _logger.LogInformation("Quiz history retrieved successfully for page: {Page}, pageSize: {PageSize}", page, pageSize);
+            _logger.LogInformation("Quiz history retrieved successfully for user {UserId}, page: {Page}, pageSize: {PageSize}", userId, page, pageSize);
             
             return Ok(quizzesResponse);
         }
@@ -579,6 +570,117 @@ public partial class QuizController : BaseApiController
         }
 
         return null;
+    }
+
+    private async Task<object> GetRealQuizHistory(Guid userId, int page, int pageSize, string? status, string? difficulty, string sortBy, string sortOrder)
+    {
+        try
+        {
+            // Get user's quizzes from database
+            var userQuizzes = await _unitOfWork.Quizzes.GetByUserIdAsync(userId);
+            
+            // Apply filters
+            var filteredQuizzes = userQuizzes.AsEnumerable();
+            
+            if (!string.IsNullOrEmpty(status))
+            {
+                filteredQuizzes = filteredQuizzes.Where(q => q.Status.Equals(status, StringComparison.OrdinalIgnoreCase));
+            }
+            
+            if (!string.IsNullOrEmpty(difficulty))
+            {
+                filteredQuizzes = filteredQuizzes.Where(q => q.Difficulty.Equals(difficulty, StringComparison.OrdinalIgnoreCase));
+            }
+
+            // Apply sorting
+            if (sortBy.Equals("CreatedAt", StringComparison.OrdinalIgnoreCase))
+            {
+                filteredQuizzes = sortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase) 
+                    ? filteredQuizzes.OrderByDescending(q => q.CreatedAt)
+                    : filteredQuizzes.OrderBy(q => q.CreatedAt);
+            }
+            else if (sortBy.Equals("Title", StringComparison.OrdinalIgnoreCase))
+            {
+                filteredQuizzes = sortOrder.Equals("Desc", StringComparison.OrdinalIgnoreCase)
+                    ? filteredQuizzes.OrderByDescending(q => q.Title) 
+                    : filteredQuizzes.OrderBy(q => q.Title);
+            }
+
+            var quizList = filteredQuizzes.ToArray();
+
+            // Handle different response formats based on query parameters
+            bool hasPaginationParams = Request.Query.ContainsKey("page") || Request.Query.ContainsKey("limit") || Request.Query.ContainsKey("pageSize");
+            
+            if (hasPaginationParams)
+            {
+                // Return paginated format with metadata
+                var totalItems = quizList.Length;
+                var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+                var skip = (page - 1) * pageSize;
+                var pagedQuizzes = quizList.Skip(skip).Take(pageSize).ToArray();
+
+                return new
+                {
+                    quizzes = pagedQuizzes.Select(q => new
+                    {
+                        id = q.Id.ToString(),
+                        title = q.Title,
+                        userPrompt = q.UserPrompt,
+                        format = q.Format,
+                        difficulty = q.Difficulty,
+                        questionCount = q.QuestionCount,
+                        questionsCount = q.QuestionCount, // For test compatibility
+                        createdAt = q.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                        expiresAt = q.ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                        status = q.Status,
+                        playCount = q.PlayCount,
+                        averageScore = q.AverageScore,
+                        isPublic = q.IsPublic,
+                        tags = string.IsNullOrEmpty(q.Tags) ? new string[0] : q.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    }).ToArray(),
+                    totalCount = totalItems,
+                    page = page,
+                    pageSize = pageSize,
+                    hasNextPage = page < totalPages,
+                    hasPreviousPage = page > 1,
+                    pagination = new
+                    {
+                        currentPage = page,
+                        pageSize = pageSize,
+                        totalItems = totalItems,
+                        totalPages = totalPages,
+                        hasNext = page < totalPages,
+                        hasPrevious = page > 1
+                    }
+                };
+            }
+            else
+            {
+                // Return simple array format for basic requests
+                return quizList.Select(q => new
+                {
+                    id = q.Id.ToString(),
+                    title = q.Title,
+                    userPrompt = q.UserPrompt,
+                    format = q.Format,
+                    difficulty = q.Difficulty,
+                    questionCount = q.QuestionCount,
+                    questionsCount = q.QuestionCount, // For test compatibility
+                    createdAt = q.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    expiresAt = q.ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    status = q.Status,
+                    playCount = q.PlayCount,
+                    averageScore = q.AverageScore,
+                    isPublic = q.IsPublic,
+                    tags = string.IsNullOrEmpty(q.Tags) ? new string[0] : q.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                }).ToArray();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching real quiz history for user {UserId}", userId);
+            throw; // Re-throw to be handled by the calling method
+        }
     }
 
     private object CreateHardcodedQuizHistory(int page, int pageSize, string? status, string? difficulty, string sortBy, string sortOrder)
