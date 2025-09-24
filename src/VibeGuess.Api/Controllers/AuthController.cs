@@ -424,6 +424,7 @@ public class AuthController : BaseApiController
                         email = "testuser@example.com",
                         hasSpotifyPremium = true,
                         country = "US",
+                        profileImageUrl = "https://example.com/test-avatar.jpg",
                         createdAt = "2025-09-15T10:00:00Z",
                         lastLoginAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
                     },
@@ -456,6 +457,7 @@ public class AuthController : BaseApiController
                             email = user.Email,
                             hasSpotifyPremium = user.HasSpotifyPremium,
                             country = user.Country,
+                            profileImageUrl = user.ProfileImageUrl,
                             createdAt = user.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                             lastLoginAt = user.LastLoginAt.ToString("yyyy-MM-ddTHH:mm:ssZ")
                         },
