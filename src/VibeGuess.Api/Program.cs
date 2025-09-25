@@ -86,6 +86,9 @@ builder.Services.AddSingleton<VibeGuess.Api.Services.OpenAI.IOpenAIHealthService
 // Configure Quiz Generation Service
 builder.Services.AddScoped<VibeGuess.Api.Services.Quiz.IQuizGenerationService, VibeGuess.Api.Services.Quiz.QuizGenerationService>();
 
+// Configure Spotify API Service
+builder.Services.AddScoped<VibeGuess.Api.Services.Spotify.ISpotifyApiService, VibeGuess.Api.Services.Spotify.SpotifyApiService>();
+
 // Add authentication: register both Test scheme (for integration tests) and JWT Bearer
 var isTestEnv = string.Equals(builder.Environment.EnvironmentName, "Test", StringComparison.OrdinalIgnoreCase);
 if (isTestEnv)

@@ -4,7 +4,9 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using VibeGuess.Api.Services.OpenAI;
+using VibeGuess.Api.Services.Spotify;
 using VibeGuess.Core.Entities;
+using VibeGuess.Infrastructure.Repositories.Interfaces;
 using VibeGuess.Spotify.Authentication.Services;
 
 namespace VibeGuess.Api.Services.Quiz;
@@ -16,17 +18,23 @@ public class QuizGenerationService : IQuizGenerationService
 {
     private readonly OpenAISettings _openAiSettings;
     private readonly ISpotifyAuthenticationService _spotifyAuth;
+    private readonly ISpotifyApiService _spotifyApiService;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly HttpClient _httpClient;
     private readonly ILogger<QuizGenerationService> _logger;
 
     public QuizGenerationService(
         IOptions<OpenAISettings> openAiSettings,
         ISpotifyAuthenticationService spotifyAuth,
+        ISpotifyApiService spotifyApiService,
+        IUnitOfWork unitOfWork,
         IHttpClientFactory httpClientFactory,
         ILogger<QuizGenerationService> logger)
     {
         _openAiSettings = openAiSettings.Value;
         _spotifyAuth = spotifyAuth;
+        _spotifyApiService = spotifyApiService;
+        _unitOfWork = unitOfWork;
         _logger = logger;
         
         _httpClient = httpClientFactory.CreateClient();
@@ -329,28 +337,73 @@ Respond only with valid JSON in the specified format.";
     {
         try
         {
-            // This is a placeholder for Spotify track search
-            // In a real implementation, you would call Spotify's search API
-            // For now, return a mock track with the provided information
+            _logger.LogInformation("Looking for track: {Artist} - {Track}", artistName, trackName);
+
+            // Step 1: Check if track already exists in database
+            var existingTracks = await _unitOfWork.Tracks.SearchAsync($"{artistName} {trackName}");
+            var exactMatch = existingTracks.FirstOrDefault(t => 
+                string.Equals(t.Name, trackName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(t.ArtistName, artistName, StringComparison.OrdinalIgnoreCase));
+
+            if (exactMatch != null)
+            {
+                _logger.LogInformation("Found existing track in database: {TrackId} - {Artist} - {Track}", 
+                    exactMatch.Id, exactMatch.ArtistName, exactMatch.Name);
+                return exactMatch;
+            }
+
+            // Step 2: Search Spotify API for the track
+            var spotifyTrack = await _spotifyApiService.SearchTrackAsync(trackName, artistName);
             
-            var track = new Track
+            if (spotifyTrack != null)
+            {
+                // Step 3: Check if this Spotify track already exists in database
+                var existingBySpotifyId = await _unitOfWork.Tracks.GetBySpotifyTrackIdAsync(spotifyTrack.SpotifyTrackId);
+                if (existingBySpotifyId != null)
+                {
+                    _logger.LogInformation("Found existing Spotify track in database: {SpotifyId}", spotifyTrack.SpotifyTrackId);
+                    return existingBySpotifyId;
+                }
+
+                // Step 4: Save new track to database
+                var savedTrack = await _unitOfWork.Tracks.AddAsync(spotifyTrack);
+                await _unitOfWork.SaveChangesAsync();
+                
+                _logger.LogInformation("Saved new Spotify track: {SpotifyId} - {Artist} - {Track}", 
+                    savedTrack.SpotifyTrackId, savedTrack.ArtistName, savedTrack.Name);
+                
+                return savedTrack;
+            }
+
+            // Step 5: If Spotify API fails, create a mock track for fallback
+            _logger.LogWarning("Spotify API search failed for {Artist} - {Track}, creating mock track", artistName, trackName);
+            
+            var mockTrack = new Track
             {
                 Id = Guid.NewGuid(),
-                SpotifyTrackId = $"spotify:track:{Guid.NewGuid():N}",
+                SpotifyTrackId = $"mock:track:{Guid.NewGuid():N}",
                 Name = trackName,
                 ArtistName = artistName,
-                AlbumName = "Unknown Album", // Would be filled from Spotify API
+                AlbumName = "Unknown Album",
                 DurationMs = 180000, // Default 3 minutes
-                PreviewUrl = null, // Would be filled from Spotify API
+                Popularity = 50, // Medium popularity
+                IsExplicit = false,
+                PreviewUrl = null,
                 CreatedAt = DateTime.UtcNow
             };
 
-            _logger.LogInformation("Created mock track: {Artist} - {Track}", artistName, trackName);
-            return track;
+            // Save mock track to avoid repeated API calls for the same failed search
+            var savedMockTrack = await _unitOfWork.Tracks.AddAsync(mockTrack);
+            await _unitOfWork.SaveChangesAsync();
+
+            _logger.LogInformation("Created and saved mock track: {TrackId} - {Artist} - {Track}", 
+                savedMockTrack.Id, artistName, trackName);
+            
+            return savedMockTrack;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error creating track for {Artist} - {Track}", artistName, trackName);
+            _logger.LogError(ex, "Error finding/creating track for {Artist} - {Track}", artistName, trackName);
             return null;
         }
     }

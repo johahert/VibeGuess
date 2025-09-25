@@ -16,6 +16,11 @@ public class SpotifyAuthenticationOptions
     public string ClientId { get; set; } = string.Empty;
 
     /// <summary>
+    /// Spotify application client secret (for server-to-server authentication).
+    /// </summary>
+    public string ClientSecret { get; set; } = string.Empty;
+
+    /// <summary>
     /// OAuth 2.0 redirect URI configured in Spotify app settings.
     /// </summary>
     public string RedirectUri { get; set; } = string.Empty;
