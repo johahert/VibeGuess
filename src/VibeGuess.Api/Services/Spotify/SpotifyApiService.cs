@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using VibeGuess.Api.Services.Authentication;
 using VibeGuess.Core.Entities;
 using VibeGuess.Spotify.Authentication.Models;
 using VibeGuess.Spotify.Authentication.Services;
@@ -15,17 +16,20 @@ public class SpotifyApiService : ISpotifyApiService
 {
     private readonly HttpClient _httpClient;
     private readonly ISpotifyAuthenticationService _spotifyAuth;
+    private readonly ICurrentUserSpotifyService _currentUserService;
     private readonly SpotifyAuthenticationOptions _options;
     private readonly ILogger<SpotifyApiService> _logger;
 
     public SpotifyApiService(
         IHttpClientFactory httpClientFactory,
         ISpotifyAuthenticationService spotifyAuth,
+        ICurrentUserSpotifyService currentUserService,
         IOptions<SpotifyAuthenticationOptions> options,
         ILogger<SpotifyApiService> logger)
     {
         _httpClient = httpClientFactory.CreateClient("Spotify");
         _spotifyAuth = spotifyAuth;
+        _currentUserService = currentUserService;
         _options = options.Value;
         _logger = logger;
     }
@@ -40,13 +44,15 @@ public class SpotifyApiService : ISpotifyApiService
 
         try
         {
-            // Get a client credentials token for search (doesn't require user auth)
-            var accessToken = await GetClientCredentialsTokenAsync(cancellationToken);
+            // Get access token - prioritize user authentication over client credentials
+            var (accessToken, isUserToken) = await GetAccessTokenAsync(cancellationToken);
             if (string.IsNullOrEmpty(accessToken))
             {
                 _logger.LogWarning("Failed to get Spotify access token for track search - API integration not available");
                 return null;
             }
+
+            _logger.LogDebug("Using {TokenType} for track search", isUserToken ? "user token" : "client credentials");
 
             // Construct search query with proper escaping
             var query = Uri.EscapeDataString($"track:\"{trackName}\" artist:\"{artistName}\"");
@@ -133,12 +139,15 @@ public class SpotifyApiService : ISpotifyApiService
     {
         try
         {
-            var accessToken = await GetClientCredentialsTokenAsync(cancellationToken);
+            // Get access token - prioritize user authentication over client credentials
+            var (accessToken, isUserToken) = await GetAccessTokenAsync(cancellationToken);
             if (string.IsNullOrEmpty(accessToken))
             {
                 _logger.LogWarning("Failed to get Spotify access token for track details");
                 return null;
             }
+
+            _logger.LogDebug("Using {TokenType} for track retrieval", isUserToken ? "user token" : "client credentials");
 
             var requestUri = $"{_options.ApiBaseUrl}/tracks/{spotifyTrackId}";
 
@@ -171,6 +180,34 @@ public class SpotifyApiService : ISpotifyApiService
         {
             _logger.LogError(ex, "Error getting Spotify track {SpotifyTrackId}", spotifyTrackId);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets an access token, prioritizing user authentication over client credentials.
+    /// Returns the token and a flag indicating whether it's a user token.
+    /// </summary>
+    private async Task<(string? accessToken, bool isUserToken)> GetAccessTokenAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            // First, try to get user's Spotify token if they are authenticated
+            var userToken = await _currentUserService.GetCurrentUserSpotifyTokenAsync();
+            if (!string.IsNullOrEmpty(userToken))
+            {
+                _logger.LogDebug("Using authenticated user's Spotify token for API request");
+                return (userToken, true);
+            }
+
+            // Fall back to client credentials if no user is authenticated
+            _logger.LogDebug("No user authentication found, falling back to client credentials");
+            var clientToken = await GetClientCredentialsTokenAsync(cancellationToken);
+            return (clientToken, false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting access token");
+            return (null, false);
         }
     }
 

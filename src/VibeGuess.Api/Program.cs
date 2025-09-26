@@ -89,6 +89,10 @@ builder.Services.AddScoped<VibeGuess.Api.Services.Quiz.IQuizGenerationService, V
 // Configure Spotify API Service
 builder.Services.AddScoped<VibeGuess.Api.Services.Spotify.ISpotifyApiService, VibeGuess.Api.Services.Spotify.SpotifyApiService>();
 
+// Configure Current User Spotify Service for authenticated token access
+builder.Services.AddHttpContextAccessor(); // Required for accessing current user context
+builder.Services.AddScoped<VibeGuess.Api.Services.Authentication.ICurrentUserSpotifyService, VibeGuess.Api.Services.Authentication.CurrentUserSpotifyService>();
+
 // Add authentication: register both Test scheme (for integration tests) and JWT Bearer
 var isTestEnv = string.Equals(builder.Environment.EnvironmentName, "Test", StringComparison.OrdinalIgnoreCase);
 if (isTestEnv)
