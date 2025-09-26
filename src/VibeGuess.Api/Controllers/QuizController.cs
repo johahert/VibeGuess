@@ -454,6 +454,7 @@ public partial class QuizController : BaseApiController
                         albumName = q.Track.AlbumName,
                         durationMs = q.Track.DurationMs,
                         previewUrl = q.Track.PreviewUrl,
+                        albumImageUrl = q.Track.AlbumImageUrl,
                         isPlayable = !string.IsNullOrEmpty(q.Track.PreviewUrl)
                     } : null,
                     answerOptions = q.AnswerOptions.OrderBy(ao => ao.OrderIndex).Select(ao => new

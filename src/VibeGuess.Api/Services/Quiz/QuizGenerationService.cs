@@ -246,7 +246,7 @@ Rules:
 5. Each question should have 4 multiple choice options with exactly one correct answer
 6. Include hints and brief explanations
 7. Focus on real songs, artists, albums, and music history
-8. Provide specific track and artist names for Spotify lookup
+8. Provide specific track and artist names for suited for Spotify lookup
 
 Response format (JSON):
 {{
