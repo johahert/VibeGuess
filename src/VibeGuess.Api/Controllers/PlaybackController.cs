@@ -101,84 +101,138 @@ public class PlaybackController : BaseApiController
                 return CreateErrorResponse(503, "service_unavailable", "Spotify service is currently unavailable");
             }
             
-            // Build base playback status
-            var baseStatus = new Dictionary<string, object>
+            // Use real Spotify API to get current playback status
+            try
             {
-                ["isPlaying"] = true,
-                ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                ["progressMs"] = 60000,
-                ["item"] = new
+                var playbackState = await _spotifyApiService.GetCurrentPlaybackAsync(market: market);
+
+                if (playbackState == null)
                 {
-                    id = "4iV5W9uYEdYUVa79Axb7Rh",
-                    name = "Bohemian Rhapsody",
-                    type = "track",
-                    uri = "spotify:track:4iV5W9uYEdYUVa79Axb7Rh",
-                    durationMs = 355000,
-                    artists = new[]
+                    // No active playback or device
+                    var noPlaybackStatus = new Dictionary<string, object?>
                     {
-                        new { id = "1dfeR4HaWDbWqFHLkxsg1d", name = "Queen" }
-                    },
-                    album = new
+                        ["isPlaying"] = false,
+                        ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        ["progressMs"] = null,
+                        ["item"] = null,
+                        ["device"] = null,
+                        ["shuffleState"] = false,
+                        ["repeatState"] = "off"
+                    };
+
+                    if (!string.IsNullOrEmpty(market))
                     {
-                        id = "6i6folBtxKV28WX3msQ4FE",
-                        name = "A Night at the Opera",
-                        images = new[]
-                        {
-                            new { url = "https://example.com/album.jpg", height = 640, width = 640 }
-                        }
+                        noPlaybackStatus["market"] = market;
                     }
-                },
-                ["device"] = new
-                {
-                    id = "ed01a3ca8def0a1772eab7be6c4b0bb37b06163e",
-                    name = "My Computer",
-                    type = "Computer",
-                    volumePercent = 75,
-                    isActive = true
-                },
-                ["shuffleState"] = false,
-                ["repeatState"] = "off",
-                ["actions"] = new 
-                { 
-                    interrupting_playback = true,
-                    pausing = true,
-                    resuming = true,
-                    seeking = true,
-                    skipping_next = true,
-                    skipping_prev = true,
-                    toggling_repeat_context = true,
-                    toggling_shuffle = true,
-                    transferring_playback = true,
-                    disallows = new 
-                    { 
-                        resuming = false, 
-                        skipping_next = false, 
-                        skipping_prev = false 
-                    } 
+
+                    return OkWithHeaders(noPlaybackStatus);
                 }
-            };
 
-            // Add market information if specified
-            if (!string.IsNullOrEmpty(market))
-            {
-                baseStatus["market"] = market;
-            }
-
-            // Add context information if requested
-            if (includeContext)
-            {
-                baseStatus["context"] = new 
-                { 
-                    uri = "spotify:playlist:37i9dQZEVXbMDoHDwVN2tF", 
-                    type = "playlist",
-                    href = "https://api.spotify.com/v1/playlists/37i9dQZEVXbMDoHDwVN2tF"
+                // Build response from real playback state
+                var response = new Dictionary<string, object?>
+                {
+                    ["isPlaying"] = playbackState.IsPlaying,
+                    ["timestamp"] = playbackState.Timestamp,
+                    ["progressMs"] = playbackState.ProgressMs,
+                    ["shuffleState"] = playbackState.ShuffleState,
+                    ["repeatState"] = playbackState.RepeatState
                 };
+
+                // Add track information if available
+                if (playbackState.Item != null)
+                {
+                    response["item"] = new
+                    {
+                        id = playbackState.Item.Id,
+                        name = playbackState.Item.Name,
+                        type = "track",
+                        uri = $"spotify:track:{playbackState.Item.Id}",
+                        durationMs = playbackState.Item.DurationMs,
+                        artists = playbackState.Item.Artists?.Select(a => new { id = a.Id, name = a.Name }).ToArray(),
+                        album = playbackState.Item.Album != null ? new
+                        {
+                            id = playbackState.Item.Album.Id,
+                            name = playbackState.Item.Album.Name,
+                            images = playbackState.Item.Album.Images?.Select(i => new { url = i.Url, height = i.Height, width = i.Width }).ToArray()
+                        } : null
+                    };
+                }
+                else
+                {
+                    response["item"] = null;
+                }
+
+                // Add device information if available
+                if (playbackState.Device != null)
+                {
+                    response["device"] = new
+                    {
+                        id = playbackState.Device.Id,
+                        name = playbackState.Device.Name,
+                        type = playbackState.Device.Type,
+                        volumePercent = playbackState.Device.VolumePercent,
+                        isActive = playbackState.Device.IsActive
+                    };
+                }
+                else
+                {
+                    response["device"] = null;
+                }
+
+                // Add actions information if available
+                if (playbackState.Actions != null)
+                {
+                    response["actions"] = new
+                    {
+                        interrupting_playback = playbackState.Actions.InterruptingPlayback,
+                        pausing = playbackState.Actions.Pausing,
+                        resuming = playbackState.Actions.Resuming,
+                        seeking = playbackState.Actions.Seeking,
+                        skipping_next = playbackState.Actions.SkippingNext,
+                        skipping_prev = playbackState.Actions.SkippingPrev,
+                        toggling_repeat_context = playbackState.Actions.TogglingRepeatContext,
+                        toggling_shuffle = playbackState.Actions.TogglingShuffle,
+                        transferring_playback = playbackState.Actions.TransferringPlayback,
+                        disallows = playbackState.Actions.Disallows != null ? new
+                        {
+                            resuming = playbackState.Actions.Disallows.Resuming,
+                            skipping_next = playbackState.Actions.Disallows.SkippingNext,
+                            skipping_prev = playbackState.Actions.Disallows.SkippingPrev
+                        } : null
+                    };
+                }
+
+                // Add context information if available and requested
+                if (includeContext && playbackState.Context != null)
+                {
+                    response["context"] = new
+                    {
+                        uri = playbackState.Context.Uri,
+                        type = playbackState.Context.Type,
+                        href = playbackState.Context.Href
+                    };
+                }
+
+                // Add market information if specified
+                if (!string.IsNullOrEmpty(market))
+                {
+                    response["market"] = market;
+                }
+
+                // Add caching for brief periods (5 seconds)
+                Response.Headers.CacheControl = "public, max-age=5";
+
+                return OkWithHeaders(response);
             }
-
-            // Add caching for brief periods (5 seconds)
-            Response.Headers.CacheControl = "public, max-age=5";
-
-            return OkWithHeaders(baseStatus);
+            catch (InvalidOperationException ex) when (ex.Message.Contains("No valid"))
+            {
+                return CreateErrorResponse(401, "authentication_required", "User must be authenticated with Spotify to get playback status");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting Spotify playback status");
+                return CreateErrorResponse(503, "service_unavailable", "Spotify service is temporarily unavailable");
+            }
         }
         catch (Exception ex)
         {
@@ -388,39 +442,82 @@ public class PlaybackController : BaseApiController
                 }
             }
 
-            // Return successful playback status
-            var trackUri = request?.TrackUri ?? request?.Uris?.FirstOrDefault() ?? "spotify:track:4iV5W9uYEdYUVa79Axb7Rh";
-            var deviceId = request?.DeviceId ?? "spotify-device-id";
-            var positionMs = request?.PositionMs ?? 0;
-            
-            var volume = request?.Volume ?? 75;
-            
-            var playbackStatus = new
+            // Use real Spotify API to start playback
+            string[]? trackUris = null;
+            if (request?.Uris != null && request.Uris.Length > 0)
             {
-                isPlaying = true,
-                trackUri = trackUri,
-                deviceId = deviceId,
-                positionMs = positionMs,
-                progressMs = positionMs, // Some tests expect this field name
-                volume = volume,
-                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                item = new
-                {
-                    id = "4iV5W9uYEdYUVa79Axb7Rh",
-                    name = "Bohemian Rhapsody",
-                    uri = trackUri,
-                    durationMs = 355000
-                },
-                device = new
-                {
-                    id = deviceId,
-                    name = "Test Device",
-                    type = "Computer",
-                    volumePercent = volume
-                }
-            };
+                trackUris = request.Uris;
+            }
+            else if (!string.IsNullOrEmpty(request?.TrackUri))
+            {
+                trackUris = new[] { request.TrackUri };
+            }
 
-            return OkWithHeaders(playbackStatus);
+            try
+            {
+                await _spotifyApiService.StartPlaybackAsync(
+                    deviceId: request?.DeviceId,
+                    trackUris: trackUris,
+                    contextUri: request?.ContextUri,
+                    positionMs: request?.PositionMs
+                );
+
+                // Get current playback state after starting playback
+                var playbackState = await _spotifyApiService.GetCurrentPlaybackAsync();
+
+                if (playbackState != null)
+                {
+                    var response = new
+                    {
+                        isPlaying = playbackState.IsPlaying,
+                        trackUri = playbackState.Item?.ExternalUrls?.Spotify,
+                        deviceId = playbackState.Device?.Id,
+                        positionMs = playbackState.ProgressMs,
+                        progressMs = playbackState.ProgressMs,
+                        timestamp = playbackState.Timestamp,
+                        item = playbackState.Item != null ? new
+                        {
+                            id = playbackState.Item.Id,
+                            name = playbackState.Item.Name,
+                            uri = $"spotify:track:{playbackState.Item.Id}",
+                            durationMs = playbackState.Item.DurationMs
+                        } : null,
+                        device = playbackState.Device != null ? new
+                        {
+                            id = playbackState.Device.Id,
+                            name = playbackState.Device.Name,
+                            type = playbackState.Device.Type,
+                            volumePercent = playbackState.Device.VolumePercent
+                        } : null
+                    };
+
+                    return OkWithHeaders(response);
+                }
+                else
+                {
+                    // Fallback response if we can't get current state
+                    var fallbackResponse = new
+                    {
+                        isPlaying = true,
+                        message = "Playback started successfully",
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    return OkWithHeaders(fallbackResponse);
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("No active device"))
+            {
+                return CreateErrorResponse(404, "no_active_device", "No active device found. Please start Spotify on a device first.");
+            }
+            catch (UnauthorizedAccessException ex) when (ex.Message.Contains("Premium"))
+            {
+                return CreateErrorResponse(403, "premium_required", "Spotify Premium subscription required for playback control");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error starting Spotify playback");
+                return CreateErrorResponse(503, "service_unavailable", "Failed to start playback on Spotify");
+            }
         }
         catch (Exception ex)
         {
@@ -496,41 +593,66 @@ public class PlaybackController : BaseApiController
             // Check for already paused scenario (based on device ID)
             var isAlreadyPaused = !string.IsNullOrEmpty(request?.DeviceId) && request.DeviceId.Contains("already-paused");
             
-            // Return successful pause status
-            var deviceId = request?.DeviceId ?? "spotify-device-id";
-            var pausedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            
-            // Build response object dynamically
-            var playbackStatus = new Dictionary<string, object>
+            // Use real Spotify API to pause playback
+            try
             {
-                ["isPlaying"] = false,
-                ["deviceId"] = deviceId,
-                ["progressMs"] = 120000, // Current position when paused
-                ["pausedAt"] = pausedAt,
-                ["timestamp"] = pausedAt,
-                ["item"] = new
+                await _spotifyApiService.PausePlaybackAsync(deviceId: request?.DeviceId);
+
+                // Get current playback state after pausing
+                var playbackState = await _spotifyApiService.GetCurrentPlaybackAsync();
+
+                if (playbackState != null)
                 {
-                    id = "4iV5W9uYEdYUVa79Axb7Rh",
-                    name = "Bohemian Rhapsody",
-                    uri = "spotify:track:4iV5W9uYEdYUVa79Axb7Rh",
-                    durationMs = 355000
-                },
-                ["device"] = new
-                {
-                    id = deviceId,
-                    name = "Test Device",
-                    type = "Computer",
-                    volumePercent = 75
+                    var response = new
+                    {
+                        isPlaying = playbackState.IsPlaying,
+                        deviceId = playbackState.Device?.Id,
+                        progressMs = playbackState.ProgressMs,
+                        pausedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        timestamp = playbackState.Timestamp,
+                        item = playbackState.Item != null ? new
+                        {
+                            id = playbackState.Item.Id,
+                            name = playbackState.Item.Name,
+                            uri = $"spotify:track:{playbackState.Item.Id}",
+                            durationMs = playbackState.Item.DurationMs
+                        } : null,
+                        device = playbackState.Device != null ? new
+                        {
+                            id = playbackState.Device.Id,
+                            name = playbackState.Device.Name,
+                            type = playbackState.Device.Type,
+                            volumePercent = playbackState.Device.VolumePercent
+                        } : null
+                    };
+
+                    return OkWithHeaders(response);
                 }
-            };
-
-            // Add message only if already paused
-            if (isAlreadyPaused)
-            {
-                playbackStatus["message"] = "Playback is already paused";
+                else
+                {
+                    // Fallback response if we can't get current state
+                    var fallbackResponse = new
+                    {
+                        isPlaying = false,
+                        message = "Playback paused successfully",
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    };
+                    return OkWithHeaders(fallbackResponse);
+                }
             }
-
-            return OkWithHeaders(playbackStatus);
+            catch (InvalidOperationException ex) when (ex.Message.Contains("No active device"))
+            {
+                return CreateErrorResponse(404, "no_active_device", "No active device found. Please start Spotify on a device first.");
+            }
+            catch (UnauthorizedAccessException ex) when (ex.Message.Contains("Premium"))
+            {
+                return CreateErrorResponse(403, "premium_required", "Spotify Premium subscription required for playback control");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error pausing Spotify playback");
+                return CreateErrorResponse(503, "service_unavailable", "Failed to pause playback on Spotify");
+            }
         }
         catch (Exception ex)
         {

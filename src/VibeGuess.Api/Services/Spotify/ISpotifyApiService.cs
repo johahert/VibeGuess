@@ -31,4 +31,34 @@ public interface ISpotifyApiService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>List of available Spotify devices or null if user not authenticated</returns>
     Task<IEnumerable<SpotifyDevice>?> GetUserDevicesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Start or resume playback on a Spotify device.
+    /// Requires user authentication with playback scope.
+    /// </summary>
+    /// <param name="deviceId">Device ID to play on (optional - uses active device if not specified)</param>
+    /// <param name="trackUris">Track URIs to play (optional)</param>
+    /// <param name="contextUri">Context URI (playlist/album) to play (optional)</param>
+    /// <param name="positionMs">Position to start playback at in milliseconds (optional)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if successful, false otherwise</returns>
+    Task<bool> StartPlaybackAsync(string? deviceId = null, string[]? trackUris = null, string? contextUri = null, int? positionMs = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pause playback on a Spotify device.
+    /// Requires user authentication with playback scope.
+    /// </summary>
+    /// <param name="deviceId">Device ID to pause (optional - uses active device if not specified)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if successful, false otherwise</returns>
+    Task<bool> PausePlaybackAsync(string? deviceId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the current playback state for the user.
+    /// Requires user authentication.
+    /// </summary>
+    /// <param name="market">Market for track relinking (optional)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Current playback state or null if not available</returns>
+    Task<SpotifyPlaybackState?> GetCurrentPlaybackAsync(string? market = null, CancellationToken cancellationToken = default);
 }

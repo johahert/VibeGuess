@@ -280,6 +280,159 @@ public class SpotifyApiService : ISpotifyApiService
         }
     }
 
+    public async Task<bool> StartPlaybackAsync(string? deviceId = null, string[]? trackUris = null, string? contextUri = null, int? positionMs = null, CancellationToken cancellationToken = default)
+    {
+        var (accessToken, _) = await GetAccessTokenAsync(CancellationToken.None);
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            throw new InvalidOperationException("No valid Spotify access token available");
+        }
+
+        using var client = new HttpClient();
+        
+        var url = $"{_options.ApiBaseUrl}/me/player/play";
+        if (!string.IsNullOrEmpty(deviceId))
+        {
+            url += $"?device_id={Uri.EscapeDataString(deviceId)}";
+        }
+
+        var request = new HttpRequestMessage(HttpMethod.Put, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        var payload = new Dictionary<string, object>();
+        if (trackUris?.Length > 0)
+        {
+            payload["uris"] = trackUris;
+        }
+        if (!string.IsNullOrEmpty(contextUri))
+        {
+            payload["context_uri"] = contextUri;
+        }
+        if (positionMs.HasValue)
+        {
+            payload["position_ms"] = positionMs.Value;
+        }
+
+        if (payload.Any())
+        {
+            var json = JsonSerializer.Serialize(payload);
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        }
+
+        try
+        {
+            var response = await client.SendAsync(request, cancellationToken);
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                throw new InvalidOperationException("No active device found. Please start Spotify on a device first.");
+            }
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                throw new UnauthorizedAccessException("Spotify Premium subscription required for playback control");
+            }
+
+            response.EnsureSuccessStatusCode();
+            
+            _logger.LogInformation("Started Spotify playback successfully");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error starting Spotify playback");
+            throw;
+        }
+    }
+
+    public async Task<bool> PausePlaybackAsync(string? deviceId = null, CancellationToken cancellationToken = default)
+    {
+        var (accessToken, _) = await GetAccessTokenAsync(CancellationToken.None);
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            throw new InvalidOperationException("No valid Spotify access token available");
+        }
+
+        using var client = new HttpClient();
+        
+        var url = $"{_options.ApiBaseUrl}/me/player/pause";
+        if (!string.IsNullOrEmpty(deviceId))
+        {
+            url += $"?device_id={Uri.EscapeDataString(deviceId)}";
+        }
+
+        var request = new HttpRequestMessage(HttpMethod.Put, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        try
+        {
+            var response = await client.SendAsync(request, cancellationToken);
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                throw new InvalidOperationException("No active device found. Please start Spotify on a device first.");
+            }
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                throw new UnauthorizedAccessException("Spotify Premium subscription required for playback control");
+            }
+
+            response.EnsureSuccessStatusCode();
+            
+            _logger.LogInformation("Paused Spotify playback successfully");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error pausing Spotify playback");
+            throw;
+        }
+    }
+
+    public async Task<SpotifyPlaybackState?> GetCurrentPlaybackAsync(string? market = "US", CancellationToken cancellationToken = default)
+    {
+        var (accessToken, _) = await GetAccessTokenAsync(CancellationToken.None);
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            throw new InvalidOperationException("No valid Spotify access token available");
+        }
+
+        using var client = new HttpClient();
+        
+        var url = $"{_options.ApiBaseUrl}/me/player?market={Uri.EscapeDataString(market ?? "US")}";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        try
+        {
+            var response = await client.SendAsync(request, cancellationToken);
+            
+            if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+            {
+                // No active session or device
+                return null;
+            }
+
+            response.EnsureSuccessStatusCode();
+            
+            var json = await response.Content.ReadAsStringAsync();
+            var playbackState = JsonSerializer.Deserialize<SpotifyPlaybackState>(json, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                PropertyNameCaseInsensitive = true
+            });
+
+            _logger.LogInformation("Retrieved current Spotify playback state successfully");
+            return playbackState;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving current Spotify playback state");
+            throw;
+        }
+    }
+
     /// <summary>
     /// Gets an access token, prioritizing user authentication over client credentials.
     /// Returns the token and a flag indicating whether it's a user token.
@@ -484,4 +637,53 @@ public class SpotifyDeviceType
     public const string CastAudio = "CastAudio";
     public const string Automobile = "Automobile";
     public const string Unknown = "Unknown";
+}
+
+public class SpotifyPlaybackState
+{
+    public bool IsPlaying { get; set; }
+    public long Timestamp { get; set; }
+    public int? ProgressMs { get; set; }
+    public SpotifyTrack? Item { get; set; }
+    public SpotifyDevice? Device { get; set; }
+    public bool ShuffleState { get; set; }
+    public string RepeatState { get; set; } = "off"; // "off", "track", "context"
+    public SpotifyContext? Context { get; set; }
+    public SpotifyActions? Actions { get; set; }
+}
+
+public class SpotifyContext
+{
+    public string Type { get; set; } = string.Empty; // "playlist", "album", "artist"
+    public string Href { get; set; } = string.Empty;
+    public string Uri { get; set; } = string.Empty;
+}
+
+public class SpotifyActions
+{
+    public bool InterruptingPlayback { get; set; }
+    public bool Pausing { get; set; }
+    public bool Resuming { get; set; }
+    public bool Seeking { get; set; }
+    public bool SkippingNext { get; set; }
+    public bool SkippingPrev { get; set; }
+    public bool TogglingRepeatContext { get; set; }
+    public bool TogglingRepeatTrack { get; set; }
+    public bool TogglingShuffle { get; set; }
+    public bool TransferringPlayback { get; set; }
+    public SpotifyDisallows? Disallows { get; set; }
+}
+
+public class SpotifyDisallows
+{
+    public bool InterruptingPlayback { get; set; }
+    public bool Pausing { get; set; }
+    public bool Resuming { get; set; }
+    public bool Seeking { get; set; }
+    public bool SkippingNext { get; set; }
+    public bool SkippingPrev { get; set; }
+    public bool TogglingRepeatContext { get; set; }
+    public bool TogglingRepeatTrack { get; set; }
+    public bool TogglingShuffle { get; set; }
+    public bool TransferringPlayback { get; set; }
 }
