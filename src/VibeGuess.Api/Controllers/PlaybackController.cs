@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Text.Json;
+using VibeGuess.Api.Services.Spotify;
 
 namespace VibeGuess.Api.Controllers;
 
@@ -13,10 +14,14 @@ namespace VibeGuess.Api.Controllers;
 public class PlaybackController : BaseApiController
 {
     private readonly ILogger<PlaybackController> _logger;
+    private readonly ISpotifyApiService _spotifyApiService;
 
-    public PlaybackController(ILogger<PlaybackController> logger)
+    public PlaybackController(
+        ILogger<PlaybackController> logger,
+        ISpotifyApiService spotifyApiService)
     {
         _logger = logger;
+        _spotifyApiService = spotifyApiService;
     }
 
     /// <summary>
@@ -194,7 +199,9 @@ public class PlaybackController : BaseApiController
     {
         try
         {
-            // Check for invalid Spotify token scenarios
+            _logger.LogInformation("Getting Spotify devices for authenticated user");
+
+            // Check for invalid Spotify token scenarios (for test compatibility)
             if (User.HasClaim("spotify_invalid", "true"))
             {
                 return CreateErrorResponse(403, "invalid_spotify_token", "The provided token is not valid for Spotify operations");
@@ -204,46 +211,64 @@ public class PlaybackController : BaseApiController
             var authHeader = Request.Headers.Authorization.FirstOrDefault();
             var token = authHeader?.Split(' ').LastOrDefault() ?? "";
 
-            // Handle "Spotify down" scenario
+            // Handle "Spotify down" scenario (for test compatibility)
             if (token.Contains("spotify.down"))
             {
                 return CreateErrorResponse(503, "service_unavailable", "Spotify service is currently unavailable");
             }
 
-            var devices = new
+            // Use real Spotify API service to get user's devices
+            var spotifyDevices = await _spotifyApiService.GetUserDevicesAsync();
+
+            if (spotifyDevices == null)
             {
-                devices = new[]
+                // User not authenticated or API error
+                return CreateErrorResponse(401, "authentication_required", "User must be authenticated with Spotify to access devices");
+            }
+
+            var devicesList = spotifyDevices.ToList();
+            var activeDevice = devicesList.FirstOrDefault(d => d.IsActive);
+
+            // Filter restricted devices if requested
+            if (!includeRestricted)
+            {
+                devicesList = devicesList.Where(d => !d.IsRestricted).ToList();
+            }
+
+            var response = new
+            {
+                devices = devicesList.Select(device => new
                 {
-                    new
-                    {
-                        id = "device123",
-                        name = "Test Device",
-                        type = "Computer",
-                        isActive = true,
-                        isPrivateSession = false,
-                        isRestricted = false,
-                        volumePercent = 75,
-                        supportsVolume = true
-                    }
-                },
-                activeDevice = new 
+                    id = device.Id,
+                    name = device.Name,
+                    type = device.Type,
+                    isActive = device.IsActive,
+                    isPrivateSession = device.IsPrivateSession,
+                    isRestricted = device.IsRestricted,
+                    volumePercent = device.VolumePercent,
+                    supportsVolume = device.VolumePercent.HasValue // Assume if volume is reported, it's supported
+                }).ToArray(),
+                activeDevice = activeDevice != null ? new
                 {
-                    id = "device123",
-                    name = "Test Device",
-                    type = "Computer",
-                    isActive = true,
-                    isPrivateSession = false,
-                    isRestricted = false,
-                    volumePercent = 75,
-                    supportsVolume = true
-                }
+                    id = activeDevice.Id,
+                    name = activeDevice.Name,
+                    type = activeDevice.Type,
+                    isActive = activeDevice.IsActive,
+                    isPrivateSession = activeDevice.IsPrivateSession,
+                    isRestricted = activeDevice.IsRestricted,
+                    volumePercent = activeDevice.VolumePercent,
+                    supportsVolume = activeDevice.VolumePercent.HasValue
+                } : null
             };
 
-            return OkWithHeaders(devices);
+            _logger.LogInformation("Retrieved {DeviceCount} Spotify devices, {ActiveCount} active", 
+                devicesList.Count, devicesList.Count(d => d.IsActive));
+
+            return OkWithHeaders(response);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting devices");
+            _logger.LogError(ex, "Error getting Spotify devices");
             return CreateErrorResponse(503, "service_unavailable", "Spotify service is temporarily unavailable");
         }
     }

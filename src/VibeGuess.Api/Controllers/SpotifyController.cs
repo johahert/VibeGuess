@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using VibeGuess.Api.Controllers;
 using VibeGuess.Api.Services.Spotify;
 using VibeGuess.Core.Entities;
+using static VibeGuess.Api.Services.Spotify.SpotifyApiService;
 
 namespace VibeGuess.Api.Controllers;
 
@@ -111,6 +112,58 @@ public class SpotifyController : BaseApiController
             _logger.LogError(ex, "Error getting track: {SpotifyTrackId}", spotifyTrackId);
             return CreateErrorResponse(500, "track_error", "An error occurred while retrieving the track");
         }
+    }
+
+    /// <summary>
+    /// Get the user's available Spotify devices.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token for the request</param>
+    /// <returns>List of available Spotify devices</returns>
+    [HttpGet("devices")]
+    public async Task<ActionResult<DevicesResponse>> GetDevices(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogInformation("Getting user's Spotify devices");
+
+            var devices = await _spotifyApiService.GetUserDevicesAsync(cancellationToken);
+
+            if (devices == null)
+            {
+                return CreateErrorResponse(401, "authentication_required", "User must be authenticated with Spotify to access devices");
+            }
+
+            var devicesList = devices.ToList();
+            var activeDevice = devicesList.FirstOrDefault(d => d.IsActive);
+
+            return OkWithHeaders(new DevicesResponse
+            {
+                Devices = devicesList.Select(MapDeviceToResponse).ToList(),
+                ActiveDevice = activeDevice != null ? MapDeviceToResponse(activeDevice) : null,
+                DeviceCount = devicesList.Count,
+                ActiveDeviceCount = devicesList.Count(d => d.IsActive)
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting user's Spotify devices");
+            return CreateErrorResponse(500, "devices_error", "An error occurred while retrieving devices");
+        }
+    }
+
+    private static DeviceDto MapDeviceToResponse(SpotifyDevice device)
+    {
+        return new DeviceDto
+        {
+            Id = device.Id,
+            Name = device.Name,
+            Type = device.Type,
+            IsActive = device.IsActive,
+            IsPrivateSession = device.IsPrivateSession,
+            IsRestricted = device.IsRestricted,
+            VolumePercent = device.VolumePercent,
+            SupportsVolume = device.VolumePercent.HasValue
+        };
     }
 
     private static TrackDto MapTrackToResponse(Track track)
@@ -241,4 +294,76 @@ public class TrackDto
     /// When this track record was created in our system.
     /// </summary>
     public DateTime CreatedAt { get; set; }
+}
+
+/// <summary>
+/// Response model for device operations.
+/// </summary>
+public class DevicesResponse
+{
+    /// <summary>
+    /// List of available devices.
+    /// </summary>
+    public List<DeviceDto> Devices { get; set; } = new();
+
+    /// <summary>
+    /// The currently active device (if any).
+    /// </summary>
+    public DeviceDto? ActiveDevice { get; set; }
+
+    /// <summary>
+    /// Total number of devices found.
+    /// </summary>
+    public int DeviceCount { get; set; }
+
+    /// <summary>
+    /// Number of active devices.
+    /// </summary>
+    public int ActiveDeviceCount { get; set; }
+}
+
+/// <summary>
+/// Data transfer object for device information.
+/// </summary>
+public class DeviceDto
+{
+    /// <summary>
+    /// Spotify device ID.
+    /// </summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Device name.
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Device type (Computer, Smartphone, etc.).
+    /// </summary>
+    public string Type { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this device is currently active.
+    /// </summary>
+    public bool IsActive { get; set; }
+
+    /// <summary>
+    /// Whether the device is in a private session.
+    /// </summary>
+    public bool IsPrivateSession { get; set; }
+
+    /// <summary>
+    /// Whether the device is restricted.
+    /// </summary>
+    public bool IsRestricted { get; set; }
+
+    /// <summary>
+    /// Current volume percentage (0-100).
+    /// </summary>
+    public int? VolumePercent { get; set; }
+
+    /// <summary>
+    /// Whether the device supports volume control.
+    /// </summary>
+    public bool SupportsVolume { get; set; }
 }

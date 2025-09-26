@@ -23,4 +23,12 @@ public interface ISpotifyApiService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Track details or null if not found</returns>
     Task<Track?> GetTrackAsync(string spotifyTrackId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the user's available Spotify devices.
+    /// Requires user authentication - will not work with client credentials only.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>List of available Spotify devices or null if user not authenticated</returns>
+    Task<IEnumerable<SpotifyDevice>?> GetUserDevicesAsync(CancellationToken cancellationToken = default);
 }

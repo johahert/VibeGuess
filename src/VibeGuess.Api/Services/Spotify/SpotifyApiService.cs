@@ -183,6 +183,103 @@ public class SpotifyApiService : ISpotifyApiService
         }
     }
 
+    public async Task<IEnumerable<SpotifyDevice>?> GetUserDevicesAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // This endpoint requires user authentication - client credentials won't work
+            var userToken = await _currentUserService.GetCurrentUserSpotifyTokenAsync();
+            if (string.IsNullOrEmpty(userToken))
+            {
+                _logger.LogWarning("No user authentication available for device retrieval - user must be logged in");
+                return null;
+            }
+
+            _logger.LogInformation("Retrieving Spotify devices for authenticated user");
+
+            var requestUri = $"{_options.ApiBaseUrl}/me/player/devices";
+
+            // Clear any existing headers and set user's access token
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+
+            var response = await _httpClient.GetAsync(requestUri, cancellationToken);
+
+            // Handle different HTTP status codes appropriately
+            switch (response.StatusCode)
+            {
+                case System.Net.HttpStatusCode.OK:
+                    break;
+                case System.Net.HttpStatusCode.Unauthorized:
+                    _logger.LogWarning("Spotify user token is invalid or expired for device retrieval");
+                    return null;
+                case System.Net.HttpStatusCode.Forbidden:
+                    _logger.LogWarning("Spotify user lacks required scopes for device access");
+                    return null;
+                case System.Net.HttpStatusCode.TooManyRequests:
+                    _logger.LogWarning("Spotify API rate limit exceeded for device retrieval");
+                    return null;
+                case System.Net.HttpStatusCode.NoContent:
+                    // No devices available - this is normal
+                    _logger.LogInformation("No Spotify devices found for user");
+                    return new List<SpotifyDevice>();
+                default:
+                    _logger.LogWarning("Spotify device retrieval failed with status {StatusCode}", response.StatusCode);
+                    return null;
+            }
+
+            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            
+            if (string.IsNullOrEmpty(responseContent))
+            {
+                _logger.LogInformation("Empty response from Spotify devices API - no devices available");
+                return new List<SpotifyDevice>();
+            }
+
+            var devicesResponse = JsonSerializer.Deserialize<SpotifyDevicesResponse>(responseContent, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (devicesResponse?.Devices == null)
+            {
+                _logger.LogInformation("No devices found in Spotify API response");
+                return new List<SpotifyDevice>();
+            }
+
+            _logger.LogInformation("Retrieved {DeviceCount} Spotify devices for user", devicesResponse.Devices.Count);
+            
+            // Log device details for debugging
+            foreach (var device in devicesResponse.Devices)
+            {
+                _logger.LogDebug("Found device: {Name} ({Type}) - Active: {IsActive}, ID: {DeviceId}", 
+                    device.Name, device.Type, device.IsActive, device.Id);
+            }
+
+            return devicesResponse.Devices;
+        }
+        catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
+        {
+            _logger.LogWarning("Spotify devices API request timeout");
+            return null;
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Spotify devices API network error");
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "Failed to parse Spotify devices API response");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error retrieving Spotify devices");
+            return null;
+        }
+    }
+
     /// <summary>
     /// Gets an access token, prioritizing user authentication over client credentials.
     /// Returns the token and a flag indicating whether it's a user token.
@@ -354,4 +451,37 @@ public class SpotifyTokenResponse
     public string AccessToken { get; set; } = string.Empty;
     public string TokenType { get; set; } = string.Empty;
     public int ExpiresIn { get; set; }
+}
+
+public class SpotifyDevicesResponse
+{
+    public List<SpotifyDevice> Devices { get; set; } = new();
+}
+
+public class SpotifyDevice
+{
+    public string Id { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+    public bool IsPrivateSession { get; set; }
+    public bool IsRestricted { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public int? VolumePercent { get; set; }
+}
+
+public class SpotifyDeviceType
+{
+    public const string Computer = "Computer";
+    public const string Tablet = "Tablet"; 
+    public const string Smartphone = "Smartphone";
+    public const string Speaker = "Speaker";
+    public const string TV = "TV";
+    public const string AVR = "AVR";
+    public const string STB = "STB";
+    public const string AudioDongle = "AudioDongle";
+    public const string GameConsole = "GameConsole";
+    public const string CastVideo = "CastVideo";
+    public const string CastAudio = "CastAudio";
+    public const string Automobile = "Automobile";
+    public const string Unknown = "Unknown";
 }
