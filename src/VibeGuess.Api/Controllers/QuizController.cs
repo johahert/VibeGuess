@@ -157,7 +157,15 @@ public partial class QuizController : BaseApiController
                 ));
             }
 
-            var updated = ApplyQuizUpdates(quiz, request);
+            var ownershipValidation = ValidateQuestionUpdatesAgainstQuiz(quiz, request);
+            if (ownershipValidation != null)
+            {
+                return ownershipValidation;
+            }
+
+            var metadataUpdated = ApplyQuizUpdates(quiz, request);
+            var questionsUpdated = ApplyQuestionUpdates(quiz, request);
+            var updated = metadataUpdated || questionsUpdated;
 
             if (!updated)
             {
@@ -318,9 +326,9 @@ public partial class QuizController : BaseApiController
             ));
         }
 
-    var errors = new Dictionary<string, string>();
+        var errors = new Dictionary<string, string>();
 
-    QuizUpdateRequest payload = request;
+        var payload = request;
 
         if (payload.Title != null)
         {
@@ -369,11 +377,205 @@ public partial class QuizController : BaseApiController
             }
         }
 
+        if (payload.Questions != null)
+        {
+            for (var i = 0; i < payload.Questions.Count; i++)
+            {
+                var question = payload.Questions[i];
+                var questionKey = $"questions[{i}]";
+
+                if (string.IsNullOrWhiteSpace(question.Id) || !Guid.TryParse(question.Id, out _))
+                {
+                    errors[$"{questionKey}.id"] = "Must be a valid GUID";
+                    continue;
+                }
+
+                if (question.OrderIndex.HasValue && question.OrderIndex.Value < 0)
+                {
+                    errors[$"{questionKey}.orderIndex"] = "Must be zero or greater";
+                }
+
+                if (question.QuestionText != null)
+                {
+                    var trimmed = question.QuestionText.Trim();
+                    if (trimmed.Length is < 1 or > 500)
+                    {
+                        errors[$"{questionKey}.questionText"] = "Must be between 1 and 500 characters";
+                    }
+                }
+
+                if (question.Hint != null && question.Hint.Trim().Length > 200)
+                {
+                    errors[$"{questionKey}.hint"] = "Must be 200 characters or fewer";
+                }
+
+                if (question.Explanation != null && question.Explanation.Trim().Length > 1000)
+                {
+                    errors[$"{questionKey}.explanation"] = "Must be 1000 characters or fewer";
+                }
+
+                if (question.Points.HasValue && (question.Points.Value < 1 || question.Points.Value > 100))
+                {
+                    errors[$"{questionKey}.points"] = "Must be between 1 and 100";
+                }
+
+                if (question.Track != null)
+                {
+                    if (string.IsNullOrWhiteSpace(question.Track.SpotifyTrackId))
+                    {
+                        errors[$"{questionKey}.track.spotifyTrackId"] = "Field is required";
+                    }
+
+                    if (string.IsNullOrWhiteSpace(question.Track.Name))
+                    {
+                        errors[$"{questionKey}.track.name"] = "Field is required";
+                    }
+
+                    if (string.IsNullOrWhiteSpace(question.Track.ArtistName))
+                    {
+                        errors[$"{questionKey}.track.artistName"] = "Field is required";
+                    }
+
+                    if (string.IsNullOrWhiteSpace(question.Track.AlbumName))
+                    {
+                        errors[$"{questionKey}.track.albumName"] = "Field is required";
+                    }
+
+                    if (question.Track.DurationMs.HasValue && question.Track.DurationMs.Value < 0)
+                    {
+                        errors[$"{questionKey}.track.durationMs"] = "Must be zero or greater";
+                    }
+
+                    if (question.Track.PreviewUrl != null && question.Track.PreviewUrl.Length > 500)
+                    {
+                        errors[$"{questionKey}.track.previewUrl"] = "Must be 500 characters or fewer";
+                    }
+
+                    if (question.Track.AlbumImageUrl != null && question.Track.AlbumImageUrl.Length > 500)
+                    {
+                        errors[$"{questionKey}.track.albumImageUrl"] = "Must be 500 characters or fewer";
+                    }
+
+                    if (question.Track.SpotifyUrl != null && question.Track.SpotifyUrl.Length > 500)
+                    {
+                        errors[$"{questionKey}.track.spotifyUrl"] = "Must be 500 characters or fewer";
+                    }
+                }
+
+                if (question.AnswerOptions != null)
+                {
+                    if (!question.AnswerOptions.Any())
+                    {
+                        errors[$"{questionKey}.answerOptions"] = "Must include at least one answer option";
+                    }
+                    else
+                    {
+                        var correctCount = question.AnswerOptions.Count(o => o.IsCorrect);
+                        if (correctCount < 1)
+                        {
+                            errors[$"{questionKey}.answerOptions"] = "At least one answer option must be marked correct";
+                        }
+                    }
+
+                    for (var j = 0; j < (question.AnswerOptions?.Count ?? 0); j++)
+                    {
+                        var option = question.AnswerOptions![j];
+                        var optionKey = $"{questionKey}.answerOptions[{j}]";
+
+                        if (string.IsNullOrWhiteSpace(option.Id) || !Guid.TryParse(option.Id, out _))
+                        {
+                            errors[$"{optionKey}.id"] = "Must be a valid GUID";
+                        }
+
+                        var optionText = option.OptionText?.Trim() ?? string.Empty;
+                        if (optionText.Length is < 1 or > 200)
+                        {
+                            errors[$"{optionKey}.optionText"] = "Must be between 1 and 200 characters";
+                        }
+
+                        if (option.OrderIndex < 0)
+                        {
+                            errors[$"{optionKey}.orderIndex"] = "Must be zero or greater";
+                        }
+                    }
+                }
+            }
+        }
+
         if (errors.Any())
         {
             return BadRequest(CreateErrorResponse(
                 "invalid_request",
                 "One or more fields are invalid",
+                errors
+            ));
+        }
+
+        return null;
+    }
+
+    private IActionResult? ValidateQuestionUpdatesAgainstQuiz(VibeGuess.Core.Entities.Quiz quiz, QuizUpdateRequest request)
+    {
+        if (request.Questions == null || request.Questions.Count == 0)
+        {
+            return null;
+        }
+
+        var errors = new Dictionary<string, string>();
+        var seenQuestionIds = new HashSet<Guid>();
+
+        for (var i = 0; i < request.Questions.Count; i++)
+        {
+            var questionPayload = request.Questions[i];
+            var questionKey = $"questions[{i}]";
+
+            if (!Guid.TryParse(questionPayload.Id, out var questionId))
+            {
+                continue;
+            }
+
+            if (!seenQuestionIds.Add(questionId))
+            {
+                errors[$"{questionKey}.id"] = "Duplicate question ID in payload";
+                continue;
+            }
+
+            var existingQuestion = quiz.Questions.FirstOrDefault(q => q.Id == questionId);
+            if (existingQuestion == null)
+            {
+                errors[$"{questionKey}.id"] = "Question does not belong to this quiz";
+                continue;
+            }
+
+            if (questionPayload.AnswerOptions == null)
+            {
+                continue;
+            }
+
+            var existingOptions = existingQuestion.AnswerOptions.ToDictionary(option => option.Id, option => option);
+
+            for (var j = 0; j < questionPayload.AnswerOptions.Count; j++)
+            {
+                var optionPayload = questionPayload.AnswerOptions[j];
+                var optionKey = $"{questionKey}.answerOptions[{j}]";
+
+                if (!Guid.TryParse(optionPayload.Id, out var optionId))
+                {
+                    continue;
+                }
+
+                if (!existingOptions.ContainsKey(optionId))
+                {
+                    errors[$"{optionKey}.id"] = "Answer option does not belong to this question";
+                }
+            }
+        }
+
+        if (errors.Any())
+        {
+            return BadRequest(CreateErrorResponse(
+                "invalid_request",
+                "Question updates reference resources that do not belong to this quiz",
                 errors
             ));
         }
@@ -458,6 +660,240 @@ public partial class QuizController : BaseApiController
             if (!string.Equals(quiz.Tags ?? string.Empty, tagsValue, StringComparison.Ordinal))
             {
                 quiz.Tags = tagsValue;
+                updated = true;
+            }
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyQuestionUpdates(VibeGuess.Core.Entities.Quiz quiz, QuizUpdateRequest request)
+    {
+        if (request.Questions == null || request.Questions.Count == 0)
+        {
+            return false;
+        }
+
+        var updated = false;
+        var questionLookup = quiz.Questions.ToDictionary(q => q.Id, q => q);
+
+        foreach (var questionPayload in request.Questions)
+        {
+            if (!Guid.TryParse(questionPayload.Id, out var questionId))
+            {
+                continue;
+            }
+
+            if (!questionLookup.TryGetValue(questionId, out var question))
+            {
+                continue;
+            }
+
+            var questionUpdated = false;
+
+            if (questionPayload.OrderIndex.HasValue && question.OrderIndex != questionPayload.OrderIndex.Value)
+            {
+                question.OrderIndex = questionPayload.OrderIndex.Value;
+                questionUpdated = true;
+            }
+
+            if (questionPayload.QuestionText != null)
+            {
+                var newText = questionPayload.QuestionText.Trim();
+                if (!string.Equals(question.QuestionText, newText, StringComparison.Ordinal))
+                {
+                    question.QuestionText = newText;
+                    questionUpdated = true;
+                }
+            }
+
+            if (questionPayload.Hint != null)
+            {
+                var newHint = string.IsNullOrWhiteSpace(questionPayload.Hint) ? null : questionPayload.Hint.Trim();
+                if (!string.Equals(question.HintText, newHint, StringComparison.Ordinal))
+                {
+                    question.HintText = newHint;
+                    questionUpdated = true;
+                }
+            }
+
+            if (questionPayload.Explanation != null)
+            {
+                var newExplanation = string.IsNullOrWhiteSpace(questionPayload.Explanation) ? null : questionPayload.Explanation.Trim();
+                if (!string.Equals(question.Explanation, newExplanation, StringComparison.Ordinal))
+                {
+                    question.Explanation = newExplanation;
+                    questionUpdated = true;
+                }
+            }
+
+            if (questionPayload.RequiresAudio.HasValue && question.RequiresAudio != questionPayload.RequiresAudio.Value)
+            {
+                question.RequiresAudio = questionPayload.RequiresAudio.Value;
+                questionUpdated = true;
+            }
+
+            if (questionPayload.Points.HasValue && question.Points != questionPayload.Points.Value)
+            {
+                question.Points = questionPayload.Points.Value;
+                questionUpdated = true;
+            }
+
+            if (questionPayload.Track != null)
+            {
+                questionUpdated |= ApplyTrackUpdates(question, questionPayload.Track);
+            }
+
+            if (questionPayload.AnswerOptions != null)
+            {
+                questionUpdated |= ApplyAnswerOptionUpdates(question, questionPayload.AnswerOptions);
+            }
+
+            if (questionUpdated)
+            {
+                question.UpdateTimestamp();
+                updated = true;
+            }
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyTrackUpdates(Question question, QuizUpdateTrackRequest trackRequest)
+    {
+        var updated = false;
+        var track = question.Track;
+
+        if (track == null)
+        {
+            track = new Track();
+            question.Track = track;
+            track.Questions.Add(question);
+            updated = true;
+        }
+
+    static string Normalize(string value) => (value ?? string.Empty).Trim();
+
+        var newSpotifyTrackId = Normalize(trackRequest.SpotifyTrackId);
+        if (!string.Equals(track.SpotifyTrackId, newSpotifyTrackId, StringComparison.Ordinal))
+        {
+            track.SpotifyTrackId = newSpotifyTrackId;
+            updated = true;
+        }
+
+        var newName = Normalize(trackRequest.Name);
+        if (!string.Equals(track.Name, newName, StringComparison.Ordinal))
+        {
+            track.Name = newName;
+            updated = true;
+        }
+
+        var newArtistName = Normalize(trackRequest.ArtistName);
+        if (!string.Equals(track.ArtistName, newArtistName, StringComparison.Ordinal))
+        {
+            track.ArtistName = newArtistName;
+            updated = true;
+        }
+
+        var newAlbumName = Normalize(trackRequest.AlbumName);
+        if (!string.Equals(track.AlbumName, newAlbumName, StringComparison.Ordinal))
+        {
+            track.AlbumName = newAlbumName;
+            updated = true;
+        }
+
+        if (trackRequest.DurationMs.HasValue && track.DurationMs != trackRequest.DurationMs.Value)
+        {
+            track.DurationMs = trackRequest.DurationMs.Value;
+            updated = true;
+        }
+
+        static string? NormalizeOptional(string? value)
+        {
+            if (value == null)
+            {
+                return null;
+            }
+
+            var trimmed = value.Trim();
+            return trimmed.Length == 0 ? null : trimmed;
+        }
+
+        var newPreviewUrl = NormalizeOptional(trackRequest.PreviewUrl);
+        if (!string.Equals(track.PreviewUrl, newPreviewUrl, StringComparison.Ordinal))
+        {
+            track.PreviewUrl = newPreviewUrl;
+            updated = true;
+        }
+
+        var newAlbumImageUrl = NormalizeOptional(trackRequest.AlbumImageUrl);
+        if (!string.Equals(track.AlbumImageUrl, newAlbumImageUrl, StringComparison.Ordinal))
+        {
+            track.AlbumImageUrl = newAlbumImageUrl;
+            updated = true;
+        }
+
+        var newSpotifyUrl = NormalizeOptional(trackRequest.SpotifyUrl);
+        if (!string.Equals(track.SpotifyUrl, newSpotifyUrl, StringComparison.Ordinal))
+        {
+            track.SpotifyUrl = newSpotifyUrl;
+            updated = true;
+        }
+
+        if (updated)
+        {
+            track.UpdateTimestamp();
+        }
+
+        return updated;
+    }
+
+    private static bool ApplyAnswerOptionUpdates(Question question, List<QuizUpdateAnswerOptionRequest> answerOptions)
+    {
+        if (answerOptions.Count == 0)
+        {
+            return false;
+        }
+
+        var updated = false;
+        var optionsLookup = question.AnswerOptions.ToDictionary(option => option.Id, option => option);
+
+        foreach (var optionPayload in answerOptions)
+        {
+            if (!Guid.TryParse(optionPayload.Id, out var optionId))
+            {
+                continue;
+            }
+
+            if (!optionsLookup.TryGetValue(optionId, out var option))
+            {
+                continue;
+            }
+
+            var optionUpdated = false;
+
+            var newAnswerText = optionPayload.OptionText.Trim();
+            if (!string.Equals(option.AnswerText, newAnswerText, StringComparison.Ordinal))
+            {
+                option.AnswerText = newAnswerText;
+                optionUpdated = true;
+            }
+
+            if (option.IsCorrect != optionPayload.IsCorrect)
+            {
+                option.IsCorrect = optionPayload.IsCorrect;
+                optionUpdated = true;
+            }
+
+            if (option.OrderIndex != optionPayload.OrderIndex)
+            {
+                option.OrderIndex = optionPayload.OrderIndex;
+                optionUpdated = true;
+            }
+
+            if (optionUpdated)
+            {
+                option.UpdateTimestamp();
                 updated = true;
             }
         }
@@ -1152,6 +1588,59 @@ public class QuizUpdateRequest
     public string? Language { get; set; }
 
     public string[]? Tags { get; set; }
+
+    public List<QuizUpdateQuestionRequest>? Questions { get; set; }
+}
+
+public class QuizUpdateQuestionRequest
+{
+    public string Id { get; set; } = string.Empty;
+
+    public int? OrderIndex { get; set; }
+
+    public string? QuestionText { get; set; }
+
+    public string? Hint { get; set; }
+
+    public string? Explanation { get; set; }
+
+    public bool? RequiresAudio { get; set; }
+
+    public int? Points { get; set; }
+
+    public QuizUpdateTrackRequest? Track { get; set; }
+
+    public List<QuizUpdateAnswerOptionRequest>? AnswerOptions { get; set; }
+}
+
+public class QuizUpdateTrackRequest
+{
+    public string SpotifyTrackId { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public string ArtistName { get; set; } = string.Empty;
+
+    public string AlbumName { get; set; } = string.Empty;
+
+    public int? DurationMs { get; set; }
+
+    public string? PreviewUrl { get; set; }
+
+    public string? AlbumImageUrl { get; set; }
+
+    public string? SpotifyUrl { get; set; }
+}
+
+public class QuizUpdateAnswerOptionRequest
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string OptionText { get; set; } = string.Empty;
+
+    public bool IsCorrect { get; set; }
+
+    public int OrderIndex { get; set; }
 }
 
 // Quiz Session request model

@@ -17,6 +17,15 @@ public interface ISpotifyApiService
     Task<Track?> SearchTrackAsync(string trackName, string artistName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Searches for tracks on Spotify using a single query string.
+    /// </summary>
+    /// <param name="query">Free-form query string (track, artist, etc.).</param>
+    /// <param name="limit">Maximum number of tracks to return (1-10).</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Collection of matching tracks, or null if the search could not be completed</returns>
+    Task<IReadOnlyList<Track>?> SearchTracksAsync(string query, int limit = 10, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets track details by Spotify track ID.
     /// </summary>
     /// <param name="spotifyTrackId">The Spotify track ID</param>

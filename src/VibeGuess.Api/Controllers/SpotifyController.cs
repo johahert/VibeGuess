@@ -76,6 +76,54 @@ public class SpotifyController : BaseApiController
     }
 
     /// <summary>
+    /// Search for tracks on Spotify using a single query string.
+    /// </summary>
+    /// <param name="query">Free-form search query (track, artist, album, etc.)</param>
+    /// <param name="limit">Maximum number of tracks to return (1-10)</param>
+    /// <param name="cancellationToken">Cancellation token for the request</param>
+    /// <returns>Collection of matching tracks</returns>
+    [HttpGet("search/tracks")]
+    public async Task<ActionResult<TrackSearchListResponse>> SearchTracks(
+        [FromQuery] string query,
+        [FromQuery] int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return BadRequestWithError("Query is required");
+        }
+
+        var normalizedLimit = Math.Clamp(limit, 1, 10);
+
+        try
+        {
+            _logger.LogInformation("Searching Spotify for tracks with query: {Query} (limit {Limit})", query, normalizedLimit);
+
+            var tracks = await _spotifyApiService.SearchTracksAsync(query, normalizedLimit, cancellationToken);
+
+            if (tracks == null)
+            {
+                return CreateErrorResponse(500, "search_error", "Spotify search is currently unavailable");
+            }
+
+            var mappedTracks = tracks.Select(MapTrackToResponse).ToArray();
+
+            return OkWithHeaders(new TrackSearchListResponse
+            {
+                Query = query,
+                Limit = normalizedLimit,
+                Count = mappedTracks.Length,
+                Tracks = mappedTracks
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error performing Spotify query search: {Query}", query);
+            return CreateErrorResponse(500, "search_error", "An error occurred while searching for tracks");
+        }
+    }
+
+    /// <summary>
     /// Get a specific track by its Spotify track ID.
     /// </summary>
     /// <param name="spotifyTrackId">The Spotify track ID</param>
@@ -207,6 +255,32 @@ public class TrackSearchResponse
     /// Response message providing additional context.
     /// </summary>
     public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response model for multi-track search queries.
+/// </summary>
+public class TrackSearchListResponse
+{
+    /// <summary>
+    /// Original search query.
+    /// </summary>
+    public string Query { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Maximum number of tracks requested.
+    /// </summary>
+    public int Limit { get; set; }
+
+    /// <summary>
+    /// Number of tracks returned.
+    /// </summary>
+    public int Count { get; set; }
+
+    /// <summary>
+    /// Matching tracks in order returned by Spotify.
+    /// </summary>
+    public IReadOnlyList<TrackDto> Tracks { get; set; } = Array.Empty<TrackDto>();
 }
 
 /// <summary>

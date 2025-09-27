@@ -135,6 +135,103 @@ public class SpotifyApiService : ISpotifyApiService
         }
     }
 
+    public async Task<IReadOnlyList<Track>?> SearchTracksAsync(string query, int limit = 10, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            _logger.LogWarning("Invalid search query provided");
+            return Array.Empty<Track>();
+        }
+
+        var normalizedLimit = Math.Clamp(limit, 1, 10);
+
+        try
+        {
+            var (accessToken, isUserToken) = await GetAccessTokenAsync(cancellationToken);
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                _logger.LogWarning("Failed to get Spotify access token for query search");
+                return null;
+            }
+
+            _logger.LogDebug("Using {TokenType} for query search", isUserToken ? "user token" : "client credentials");
+
+            var requestUri = $"{_options.ApiBaseUrl}/search?q={Uri.EscapeDataString(query)}&type=track&limit={normalizedLimit}";
+
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            _logger.LogInformation("Searching Spotify for tracks with query: {Query} (limit {Limit})", query, normalizedLimit);
+
+            var response = await _httpClient.GetAsync(requestUri, cancellationToken);
+
+            switch (response.StatusCode)
+            {
+                case System.Net.HttpStatusCode.OK:
+                    break;
+                case System.Net.HttpStatusCode.TooManyRequests:
+                    _logger.LogWarning("Spotify API rate limit exceeded for query search: {Query}", query);
+                    return Array.Empty<Track>();
+                case System.Net.HttpStatusCode.Unauthorized:
+                case System.Net.HttpStatusCode.Forbidden:
+                    _logger.LogWarning("Spotify API authentication failed for query search: {Query}", query);
+                    return null;
+                case System.Net.HttpStatusCode.BadRequest:
+                    _logger.LogWarning("Spotify API bad request for query search: {Query}", query);
+                    return Array.Empty<Track>();
+                default:
+                    _logger.LogWarning("Spotify query search failed with status {StatusCode} for query: {Query}", response.StatusCode, query);
+                    return Array.Empty<Track>();
+            }
+
+            var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (string.IsNullOrEmpty(responseContent))
+            {
+                _logger.LogWarning("Empty response from Spotify API for query search: {Query}", query);
+                return Array.Empty<Track>();
+            }
+
+            var searchResult = JsonSerializer.Deserialize<SpotifySearchResponse>(responseContent, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (searchResult?.Tracks?.Items == null || !searchResult.Tracks.Items.Any())
+            {
+                _logger.LogInformation("No Spotify tracks found for query: {Query}", query);
+                return Array.Empty<Track>();
+            }
+
+            var tracks = searchResult.Tracks.Items
+                .Where(item => item != null)
+                .Select(MapSpotifyTrackToEntity)
+                .ToArray();
+
+            _logger.LogInformation("Found {Count} Spotify tracks for query: {Query}", tracks.Length, query);
+            return tracks;
+        }
+        catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
+        {
+            _logger.LogWarning("Spotify API request timeout for query search: {Query}", query);
+            return Array.Empty<Track>();
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Spotify API network error for query search: {Query}", query);
+            return Array.Empty<Track>();
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "Failed to parse Spotify API response for query search: {Query}", query);
+            return Array.Empty<Track>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error searching Spotify for query: {Query}", query);
+            return Array.Empty<Track>();
+        }
+    }
+
     public async Task<Track?> GetTrackAsync(string spotifyTrackId, CancellationToken cancellationToken = default)
     {
         try
