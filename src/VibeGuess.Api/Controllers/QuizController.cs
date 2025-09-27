@@ -5,6 +5,7 @@ using VibeGuess.Infrastructure.Repositories.Interfaces;
 using VibeGuess.Core.Entities;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using System.Linq;
 
 namespace VibeGuess.Api.Controllers;
 
@@ -103,6 +104,151 @@ public partial class QuizController : BaseApiController
         }
     }
 
+    /// <summary>
+    /// Update quiz metadata for the authenticated owner.
+    /// </summary>
+    [HttpPut("{quizId}")]
+    public async Task<IActionResult> UpdateQuiz(string quizId, [FromBody] QuizUpdateRequest request)
+    {
+        try
+        {
+            _logger.LogInformation("UpdateQuiz called for quiz ID: {QuizId}", quizId);
+
+            if (Request.Headers.TryGetValue("X-Correlation-ID", out var correlationId))
+            {
+                Response.Headers["X-Correlation-ID"] = correlationId.ToString();
+            }
+
+            if (!Guid.TryParse(quizId, out var parsedQuizId))
+            {
+                return BadRequest(CreateErrorResponse(
+                    "invalid_quiz_id",
+                    "The provided quiz ID format is invalid"
+                ));
+            }
+
+            var validationResult = ValidateQuizUpdateRequest(request);
+            if (validationResult != null)
+            {
+                return validationResult;
+            }
+
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+            if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var userId))
+            {
+                _logger.LogWarning("Could not extract user ID from JWT claims for quiz update");
+                return Unauthorized(CreateErrorResponse("invalid_token", "Invalid user token"));
+            }
+
+            var quiz = await _unitOfWork.Quizzes.GetWithQuestionsAsync(parsedQuizId);
+            if (quiz == null)
+            {
+                return NotFound(CreateErrorResponse(
+                    "quiz_not_found",
+                    "Quiz not found or has expired"
+                ));
+            }
+
+            if (quiz.UserId != userId)
+            {
+                return StatusCode(403, CreateErrorResponse(
+                    "forbidden",
+                    "You do not have permission to modify this quiz"
+                ));
+            }
+
+            var updated = ApplyQuizUpdates(quiz, request);
+
+            if (!updated)
+            {
+                return Ok(CreateQuizResponse(quiz, null));
+            }
+
+            quiz.UpdateTimestamp();
+            await _unitOfWork.Quizzes.UpdateAsync(quiz);
+            await _unitOfWork.SaveChangesAsync();
+
+            _logger.LogInformation("Quiz update successful for quiz ID: {QuizId}", quizId);
+            return Ok(CreateQuizResponse(quiz, null));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating quiz with ID: {QuizId}", quizId);
+            return StatusCode(500, CreateErrorResponse("internal_server_error", "An unexpected error occurred"));
+        }
+    }
+
+    /// <summary>
+    /// Delete a quiz owned by the authenticated user.
+    /// </summary>
+    [HttpDelete("{quizId}")]
+    public async Task<IActionResult> DeleteQuiz(string quizId)
+    {
+        try
+        {
+            _logger.LogInformation("DeleteQuiz called for quiz ID: {QuizId}", quizId);
+
+            if (Request.Headers.TryGetValue("X-Correlation-ID", out var correlationId))
+            {
+                Response.Headers["X-Correlation-ID"] = correlationId.ToString();
+            }
+
+            if (!Guid.TryParse(quizId, out var parsedQuizId))
+            {
+                return BadRequest(CreateErrorResponse(
+                    "invalid_quiz_id",
+                    "The provided quiz ID format is invalid"
+                ));
+            }
+
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+            if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var userId))
+            {
+                _logger.LogWarning("Could not extract user ID from JWT claims for quiz deletion");
+                return Unauthorized(CreateErrorResponse("invalid_token", "Invalid user token"));
+            }
+
+            var quiz = await _unitOfWork.Quizzes.GetByIdAsync(parsedQuizId);
+            if (quiz == null)
+            {
+                return NotFound(CreateErrorResponse(
+                    "quiz_not_found",
+                    "Quiz not found or already deleted"
+                ));
+            }
+
+            if (quiz.UserId != userId)
+            {
+                return StatusCode(403, CreateErrorResponse(
+                    "forbidden",
+                    "You do not have permission to delete this quiz"
+                ));
+            }
+
+            await _unitOfWork.Quizzes.DeleteAsync(parsedQuizId);
+            await _unitOfWork.SaveChangesAsync();
+
+            // Clean up any active session references for this quiz
+            var sessionSuffix = $"_{parsedQuizId}";
+            var sessionKeys = ActiveSessions.Keys
+                .Where(key => key.EndsWith(sessionSuffix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var key in sessionKeys)
+            {
+                ActiveSessions.Remove(key);
+            }
+
+            _logger.LogInformation("Quiz deleted successfully for quiz ID: {QuizId}", quizId);
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting quiz with ID: {QuizId}", quizId);
+            return StatusCode(500, CreateErrorResponse("internal_server_error", "An unexpected error occurred"));
+        }
+    }
+
     private IActionResult? ValidateQuizGenerateRequest(QuizGenerateRequest request)
     {
         var errors = new Dictionary<string, string>();
@@ -160,6 +306,163 @@ public partial class QuizController : BaseApiController
         }
 
         return null;
+    }
+
+    private IActionResult? ValidateQuizUpdateRequest(QuizUpdateRequest? request)
+    {
+        if (request == null)
+        {
+            return BadRequest(CreateErrorResponse(
+                "invalid_request",
+                "Request body is required"
+            ));
+        }
+
+    var errors = new Dictionary<string, string>();
+
+    QuizUpdateRequest payload = request;
+
+        if (payload.Title != null)
+        {
+            var trimmed = payload.Title.Trim();
+            if (trimmed.Length < 3 || trimmed.Length > 200)
+            {
+                errors["title"] = "Must be between 3 and 200 characters";
+            }
+        }
+
+        if (payload.Difficulty != null && !QuizDifficulty.IsValid(payload.Difficulty))
+        {
+            errors["difficulty"] = $"Must be one of: {string.Join(", ", QuizDifficulty.All)}";
+        }
+
+        if (payload.Format != null && !QuizFormat.IsValid(payload.Format))
+        {
+            errors["format"] = $"Must be one of: {string.Join(", ", QuizFormat.All)}";
+        }
+
+        if (payload.Status != null && !QuizStatus.IsValid(payload.Status))
+        {
+            errors["status"] = $"Must be one of: {string.Join(", ", QuizStatus.All)}";
+        }
+
+        if (payload.Language != null)
+        {
+            var trimmedLanguage = payload.Language.Trim();
+            if (trimmedLanguage.Length is < 2 or > 5)
+            {
+                errors["language"] = "Must be a valid ISO 639-1 code";
+            }
+        }
+
+        if (payload.Tags != null)
+        {
+            var sanitizedTags = payload.Tags
+                .Select(t => t?.Trim())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToArray();
+
+            var tagsValue = string.Join(",", sanitizedTags);
+            if (tagsValue.Length > 500)
+            {
+                errors["tags"] = "Combined length of tags must not exceed 500 characters";
+            }
+        }
+
+        if (errors.Any())
+        {
+            return BadRequest(CreateErrorResponse(
+                "invalid_request",
+                "One or more fields are invalid",
+                errors
+            ));
+        }
+
+        return null;
+    }
+
+    private static bool ApplyQuizUpdates(VibeGuess.Core.Entities.Quiz quiz, QuizUpdateRequest request)
+    {
+        var updated = false;
+
+        if (request.Title != null)
+        {
+            var newTitle = request.Title.Trim();
+            if (!string.Equals(quiz.Title, newTitle, StringComparison.Ordinal))
+            {
+                quiz.Title = newTitle;
+                updated = true;
+            }
+        }
+
+        if (request.Difficulty != null)
+        {
+            var newDifficulty = QuizDifficulty.All.FirstOrDefault(value => value.Equals(request.Difficulty, StringComparison.OrdinalIgnoreCase)) ?? quiz.Difficulty;
+            if (!string.Equals(quiz.Difficulty, newDifficulty, StringComparison.Ordinal))
+            {
+                quiz.Difficulty = newDifficulty;
+                updated = true;
+            }
+        }
+
+        if (request.Format != null)
+        {
+            var newFormat = QuizFormat.All.FirstOrDefault(value => value.Equals(request.Format, StringComparison.OrdinalIgnoreCase)) ?? quiz.Format;
+            if (!string.Equals(quiz.Format, newFormat, StringComparison.Ordinal))
+            {
+                quiz.Format = newFormat;
+                updated = true;
+            }
+        }
+
+        if (request.Status != null)
+        {
+            var newStatus = QuizStatus.All.FirstOrDefault(value => value.Equals(request.Status, StringComparison.OrdinalIgnoreCase)) ?? quiz.Status;
+            if (!string.Equals(quiz.Status, newStatus, StringComparison.Ordinal))
+            {
+                quiz.Status = newStatus;
+                updated = true;
+            }
+        }
+
+        if (request.Language != null)
+        {
+            var newLanguage = request.Language.Trim().ToLowerInvariant();
+            if (!string.Equals(quiz.Language, newLanguage, StringComparison.OrdinalIgnoreCase))
+            {
+                quiz.Language = newLanguage;
+                updated = true;
+            }
+        }
+
+        if (request.IsPublic.HasValue && quiz.IsPublic != request.IsPublic.Value)
+        {
+            quiz.IsPublic = request.IsPublic.Value;
+            updated = true;
+        }
+
+        if (request.IncludesAudio.HasValue && quiz.IncludesAudio != request.IncludesAudio.Value)
+        {
+            quiz.IncludesAudio = request.IncludesAudio.Value;
+            updated = true;
+        }
+
+        if (request.Tags != null)
+        {
+            var sanitizedTags = request.Tags
+                .Select(t => t?.Trim())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToArray();
+
+            var tagsValue = string.Join(",", sanitizedTags);
+            if (!string.Equals(quiz.Tags ?? string.Empty, tagsValue, StringComparison.Ordinal))
+            {
+                quiz.Tags = tagsValue;
+                updated = true;
+            }
+        }
+
+        return updated;
     }
 
     private object CreateQuizResponse(VibeGuess.Core.Entities.Quiz quiz, VibeGuess.Api.Services.Quiz.QuizGenerationMetadata? metadata)
@@ -827,6 +1130,28 @@ public class QuizGenerateRequest
     public bool? IncludeAudio { get; set; } = true;
 
     public string? Language { get; set; } = "en";
+}
+
+/// <summary>
+/// Request model for updating quiz metadata.
+/// </summary>
+public class QuizUpdateRequest
+{
+    public string? Title { get; set; }
+
+    public string? Difficulty { get; set; }
+
+    public string? Format { get; set; }
+
+    public bool? IsPublic { get; set; }
+
+    public bool? IncludesAudio { get; set; }
+
+    public string? Status { get; set; }
+
+    public string? Language { get; set; }
+
+    public string[]? Tags { get; set; }
 }
 
 // Quiz Session request model

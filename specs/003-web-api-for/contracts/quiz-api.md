@@ -1,16 +1,22 @@
-# API Quiz Generation Endpoints
+# Quiz API
 
-**Base URL**: `/api/quiz`  
-**Version**: v1  
-**Authentication**: Bearer Token (required)
+Base URL: `/api/quiz`
 
-## Endpoints Overview
+Authentication: Bearer token unless noted. Public quizzes can be retrieved anonymously.
+
+Headers used
+- X-Correlation-ID: Optional request header. If provided, echoed back in responses.
+- X-RateLimit-Limit / X-RateLimit-Remaining: Included on select endpoints (generate, my-quizzes).
+- ETag: Returned by GET /api/quiz/{quizId}. If-None-Match supported.
+
+## Endpoints
 
 ### POST /api/quiz/generate
-**Purpose**: Generate a new music quiz based on user prompt  
-**Authentication**: Bearer Token  
+Purpose: Generate a new music quiz from a user prompt
 
-#### Request
+Auth: Required
+
+Request
 ```json
 {
   "prompt": "Create a quiz about 80s rock bands and their hit songs",
@@ -22,337 +28,334 @@
 }
 ```
 
-#### Request Validation
-- `prompt`: Required, 10-1000 characters, non-empty after trimming
-- `questionCount`: Optional, range 5-20, default 10
-- `format`: Optional, enum ["MultipleChoice", "FreeText", "Mixed"], default "MultipleChoice"
-- `difficulty`: Optional, enum ["Easy", "Medium", "Hard"], default "Medium"
-- `includeAudio`: Optional, boolean, default true
-- `language`: Optional, ISO 639-1 code, default "en"
+Validation
+- prompt: required, 10–1000 chars (trimmed)
+- questionCount: 5–20 (default 10)
+- format: MultipleChoice | FreeText | Mixed (default MultipleChoice)
+- difficulty: Easy | Medium | Hard (default Medium)
+- includeAudio: boolean (default true)
+- language: ISO 639-1 code (default en)
 
-#### Response (200 OK)
-```json
-{
-  "quiz": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "title": "80s Rock Bands Quiz",
-    "userPrompt": "Create a quiz about 80s rock bands and their hit songs",
-    "format": "MultipleChoice",
-    "difficulty": "Medium",
-    "questionCount": 10,
-    "createdAt": "2025-09-15T12:00:00Z",
-    "expiresAt": "2025-09-16T12:00:00Z",
-    "status": "Generated",
-    "questions": [
-      {
-        "id": "550e8400-e29b-41d4-a716-446655440001",
-        "orderIndex": 1,
-        "questionText": "Which band released the hit song 'Don't Stop Believin'' in 1981?",
-        "type": "MultipleChoice",
-        "requiresAudio": true,
-        "points": 1,
-        "hint": "This band was formed in San Francisco",
-        "track": {
-          "spotifyTrackId": "4VqPOruhp5EdPBeR92t6lQ",
-          "name": "Don't Stop Believin'",
-          "artistName": "Journey",
-          "albumName": "Escape",
-          "durationMs": 251000,
-          "previewUrl": "https://p.scdn.co/mp3-preview/...",
-          "isPlayable": true
-        },
-        "answerOptions": [
+Responses
+- 200 OK
+  - Body wraps the quiz in a top-level `quiz` object and may include `generationMetadata`.
+  - Example (truncated for brevity):
+    ```json
+    {
+      "quiz": {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "title": "80s Rock Bands Quiz",
+        "userPrompt": "Create a quiz about 80s rock bands and their hit songs",
+        "format": "MultipleChoice",
+        "difficulty": "Medium",
+        "questionCount": 10,
+        "createdAt": "2025-09-15T12:00:00Z",
+        "expiresAt": "2025-10-15T12:00:00Z",
+        "status": "Generated",
+        "questions": [
           {
-            "id": "550e8400-e29b-41d4-a716-446655440002",
+            "id": "...",
             "orderIndex": 1,
-            "optionText": "Journey",
-            "isCorrect": true
-          },
-          {
-            "id": "550e8400-e29b-41d4-a716-446655440003",
-            "orderIndex": 2,
-            "optionText": "Foreigner",
-            "isCorrect": false
-          },
-          {
-            "id": "550e8400-e29b-41d4-a716-446655440004",
-            "orderIndex": 3,
-            "optionText": "REO Speedwagon",
-            "isCorrect": false
-          },
-          {
-            "id": "550e8400-e29b-41d4-a716-446655440005",
-            "orderIndex": 4,
-            "optionText": "Boston",
-            "isCorrect": false
+            "questionText": "...",
+            "type": "MultipleChoice",
+            "requiresAudio": true,
+            "points": 1,
+            "hint": "...",
+            "track": {
+              "spotifyTrackId": "...",
+              "name": "...",
+              "artistName": "...",
+              "albumName": "...",
+              "durationMs": 0,
+              "previewUrl": "...",
+              "isPlayable": true
+            },
+            "answerOptions": [
+              { "id": "...", "orderIndex": 1, "optionText": "...", "isCorrect": true }
+            ]
           }
         ]
+      },
+      "generationMetadata": {
+        "processingTimeMs": 4250,
+        "aiModel": "gpt-4",
+        "tracksFound": 8,
+        "tracksValidated": 8,
+        "tracksFailed": 0
       }
-    ]
-  },
-  "generationMetadata": {
-    "processingTimeMs": 4250,
-    "aiModel": "gpt-4",
-    "tracksFound": 8,
-    "tracksValidated": 8,
-    "tracksFailed": 0
-  }
-}
-```
+    }
+    ```
+- 400 Bad Request: `invalid_request` plus details
+- 401 Unauthorized: `invalid_token`
+- 500 Internal Server Error: `internal_server_error`
 
-#### Response (400 Bad Request)
-```json
-{
-  "error": "invalid_request",
-  "message": "Prompt is required and must be between 10-1000 characters",
-  "correlationId": "abc-123-def",
-  "details": {
-    "prompt": "Field is required"
-  }
-}
-```
-
-#### Response (422 Unprocessable Entity)
-```json
-{
-  "error": "content_generation_failed",
-  "message": "Unable to generate sufficient quiz content for the provided prompt",
-  "correlationId": "abc-123-def",
-  "details": {
-    "reason": "Insufficient track matches found",
-    "suggestedPrompts": [
-      "Try a broader music topic",
-      "Include specific artists or genres",
-      "Specify a time period or decade"
-    ]
-  }
-}
-```
+Notes
+- Rate limit headers are included: `X-RateLimit-Limit: 10`, `X-RateLimit-Remaining`.
+- X-Correlation-ID is echoed if sent.
 
 ---
 
 ### GET /api/quiz/{quizId}
-**Purpose**: Retrieve a specific quiz by ID  
-**Authentication**: Bearer Token  
+Purpose: Retrieve a specific quiz by ID
 
-#### Request
-Path parameter: `quizId` (GUID)
+Auth: Optional (required only for private quizzes unless owner)
 
-#### Response (200 OK)
-```json
-{
-  "quiz": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "title": "80s Rock Bands Quiz",
-    "userPrompt": "Create a quiz about 80s rock bands and their hit songs",
-    "format": "MultipleChoice",
-    "difficulty": "Medium",
-    "questionCount": 10,
-    "createdAt": "2025-09-15T12:00:00Z",
-    "expiresAt": "2025-09-16T12:00:00Z",
-    "status": "Generated",
-    "questions": [...] // Same structure as generate response
-  }
-}
-```
+Path params
+- quizId: GUID
 
-#### Response (404 Not Found)
-```json
-{
-  "error": "quiz_not_found",
-  "message": "Quiz not found or has expired",
-  "correlationId": "abc-123-def"
-}
-```
+Caching
+- Supports ETag via If-None-Match. Returns 304 when matched. ETag header is included in 200 responses.
 
----
-
-### GET /api/quiz/my-quizzes
-**Purpose**: Get user's quiz history with pagination  
-**Authentication**: Bearer Token  
-
-#### Request Query Parameters
-- `page`: Optional, default 1
-- `pageSize`: Optional, range 1-50, default 10
-- `status`: Optional, filter by status ["Generated", "InProgress", "Completed", "Expired"]
-- `sortBy`: Optional, ["CreatedAt", "Title"], default "CreatedAt"
-- `sortOrder`: Optional, ["Asc", "Desc"], default "Desc"
-
-#### Response (200 OK)
-```json
-{
-  "quizzes": [
+Responses
+- 200 OK
+  - Body returns the quiz object directly (no `quiz` wrapper):
+    ```json
     {
       "id": "550e8400-e29b-41d4-a716-446655440000",
       "title": "80s Rock Bands Quiz",
-      "userPrompt": "Create a quiz about 80s rock bands...",
+      "userPrompt": "...",
       "format": "MultipleChoice",
       "difficulty": "Medium",
       "questionCount": 10,
       "createdAt": "2025-09-15T12:00:00Z",
-      "expiresAt": "2025-09-16T12:00:00Z",
-      "status": "Generated"
+      "expiresAt": "2025-10-15T12:00:00Z",
+      "status": "Generated",
+      "description": "A medium difficulty quiz about music",
+      "estimatedDuration": 600,
+      "userProgress": { "completed": false, "score": null, "currentQuestion": 0 },
+      "canEdit": false,
+      "isBookmarked": false,
+      "isPublic": true,
+      "playCount": 0,
+      "averageScore": 0,
+      "tags": ["rock", "80s"],
+      "questions": [
+        {
+          "id": "...",
+          "orderIndex": 1,
+          "questionText": "...",
+          "type": "MultipleChoice",
+          "requiresAudio": true,
+          "points": 1,
+          "hint": "...",
+          "explanation": "...",
+          "track": {
+            "spotifyTrackId": "...",
+            "name": "...",
+            "artistName": "...",
+            "albumName": "...",
+            "durationMs": 0,
+            "previewUrl": "...",
+            "albumImageUrl": "...",
+            "isPlayable": true
+          },
+          "answerOptions": [
+            { "id": "...", "orderIndex": 1, "optionText": "...", "isCorrect": true }
+          ]
+        }
+      ]
     }
-  ],
-  "pagination": {
-    "currentPage": 1,
-    "pageSize": 10,
-    "totalItems": 25,
-    "totalPages": 3,
-    "hasNext": true,
-    "hasPrevious": false
-  }
+    ```
+- 304 Not Modified (ETag matched)
+- 400 Bad Request: `invalid_quiz_id`
+- 401 Unauthorized: when accessing a private quiz without auth
+- 403 Forbidden: when authenticated but not owner of a private quiz
+- 404 Not Found: `not_found` (quiz not found or expired)
+
+Notes
+- X-Correlation-ID is echoed if sent.
+
+---
+
+### GET /api/quiz/my-quizzes
+Purpose: Get the authenticated user's quiz history
+
+Auth: Required
+
+Query params
+- page: default 1
+- pageSize: 1–50 (default 10)
+- status: optional
+- difficulty: optional
+- sortBy: CreatedAt | Title (default CreatedAt)
+- sortOrder: Asc | Desc (default Desc)
+
+Responses
+- 200 OK
+  - If pagination params are present, returns an object with pagination:
+    ```json
+    {
+      "quizzes": [
+        {
+          "id": "...",
+          "title": "...",
+          "userPrompt": "...",
+          "format": "MultipleChoice",
+          "difficulty": "Medium",
+          "questionCount": 10,
+          "questionsCount": 10,
+          "createdAt": "2025-09-15T12:00:00Z",
+          "expiresAt": "2025-10-15T12:00:00Z",
+          "status": "Generated",
+          "playCount": 0,
+          "averageScore": 0,
+          "isPublic": true,
+          "tags": ["rock", "80s"]
+        }
+      ],
+      "totalCount": 25,
+      "page": 1,
+      "pageSize": 10,
+      "hasNextPage": true,
+      "hasPreviousPage": false,
+      "pagination": {
+        "currentPage": 1,
+        "pageSize": 10,
+        "totalItems": 25,
+        "totalPages": 3,
+        "hasNext": true,
+        "hasPrevious": false
+      }
+    }
+    ```
+  - If no pagination params, returns a simple array of quizzes.
+- 400 Bad Request: `invalid_request` (pagination/sort params)
+- 401 Unauthorized: `invalid_token`
+
+Notes
+- Rate limit headers are included: `X-RateLimit-Limit: 300`.
+- X-Correlation-ID is echoed if sent.
+
+---
+
+### PUT /api/quiz/{quizId}
+Purpose: Update quiz metadata (owner only)
+
+Auth: Required (must be the quiz owner)
+
+Path params
+- quizId: GUID
+
+Request
+```json
+{
+  "title": "New title",
+  "difficulty": "Easy",
+  "format": "Mixed",
+  "isPublic": true,
+  "includesAudio": true,
+  "status": "Generated",
+  "language": "en",
+  "tags": ["tag1", "tag2"]
 }
 ```
+
+Validation
+- title: 3–200 chars (optional)
+- difficulty: one of current system values
+- format: one of current system values
+- status: one of current system values
+- language: 2–5 chars (ISO 639-1)
+- tags: combined length <= 500
+
+Responses
+- 200 OK
+  - Body wraps the updated quiz in a top-level `quiz` object (same shape as generate response).
+- 400 Bad Request: `invalid_request`
+- 401 Unauthorized: `invalid_token`
+- 403 Forbidden: `forbidden` (not the owner)
+- 404 Not Found: `quiz_not_found`
+
+Notes
+- X-Correlation-ID is echoed if sent.
 
 ---
 
 ### DELETE /api/quiz/{quizId}
-**Purpose**: Delete a specific quiz (early cleanup)  
-**Authentication**: Bearer Token  
+Purpose: Delete a quiz (owner only)
 
-#### Request
-Path parameter: `quizId` (GUID)
+Auth: Required (must be the quiz owner)
 
-#### Response (204 No Content)
-No response body.
+Path params
+- quizId: GUID
 
-#### Response (404 Not Found)
-```json
-{
-  "error": "quiz_not_found",
-  "message": "Quiz not found or already deleted",
-  "correlationId": "abc-123-def"
-}
-```
+Responses
+- 204 No Content
+- 400 Bad Request: `invalid_quiz_id`
+- 401 Unauthorized: `invalid_token`
+- 403 Forbidden: `forbidden` (not the owner)
+- 404 Not Found: `quiz_not_found`
+
+Notes
+- Also clears any in-memory active session references for the quiz.
+- X-Correlation-ID is echoed if sent.
 
 ---
 
 ### POST /api/quiz/{quizId}/start-session
-**Purpose**: Start a new quiz session for taking the quiz  
-**Authentication**: Bearer Token  
+Purpose: Start a new quiz session
 
-#### Request
+Auth: Required
+
+Path params
+- quizId: GUID
+
+Request
 ```json
-{
-  "deviceId": "optional-spotify-device-id"
-}
+{ "deviceId": "spotify-device-id" }
 ```
 
-#### Response (200 OK)
-```json
-{
-  "session": {
-    "id": "660e8400-e29b-41d4-a716-446655440000",
-    "quizId": "550e8400-e29b-41d4-a716-446655440000",
-    "startedAt": "2025-09-15T13:00:00Z",
-    "currentQuestionIndex": 0,
-    "status": "InProgress",
-    "totalScore": 0,
-    "maxPossibleScore": 10,
-    "selectedDevice": {
-      "spotifyDeviceId": "device-123",
-      "name": "My Computer",
-      "type": "Computer",
-      "isActive": true
+Responses
+- 201 Created
+  - Location: `/api/quiz/session/{sessionId}`
+  - Body (top-level session info):
+    ```json
+    {
+      "sessionId": "660e8400-e29b-41d4-a716-446655440000",
+      "quizId": "550e8400-e29b-41d4-a716-446655440000",
+      "startedAt": "2025-09-15T13:00:00Z",
+      "currentQuestionIndex": 0,
+      "totalQuestions": 10,
+      "status": "active",
+      "totalScore": 0,
+      "maxPossibleScore": 10,
+      "selectedDevice": {
+        "spotifyDeviceId": "device-123",
+        "name": "Test Device",
+        "type": "Computer",
+        "isActive": true
+      }
     }
-  }
-}
-```
+    ```
+- 400 Bad Request
+  - `missing_deviceid` when deviceId is absent
+  - `invalid_json` when request body cannot be parsed
+  - `invalid_device` when deviceId is malformed/unknown
+  - `missing_request_body` when the request body is empty
+- 404 Not Found: `quiz not found` (quiz does not exist)
+- 409 Conflict: `active session` (session already exists for this quiz)
 
-#### Response (409 Conflict)
-```json
-{
-  "error": "session_limit_exceeded",
-  "message": "Maximum number of active sessions reached (3)",
-  "correlationId": "abc-123-def",
-  "details": {
-    "activeSessions": 3,
-    "maxSessions": 3
-  }
-}
-```
+Notes
+- X-Correlation-ID is echoed if sent.
 
 ---
 
-### POST /api/quiz/validate-tracks
-**Purpose**: Validate Spotify track availability for testing  
-**Authentication**: Bearer Token  
+## Additional Notes
 
-#### Request
-```json
-{
-  "trackIds": [
-    "4VqPOruhp5EdPBeR92t6lQ",
-    "7qiZfU4dY1lWllzX7mPBI3"
-  ]
-}
-```
-
-#### Response (200 OK)
-```json
-{
-  "results": [
-    {
-      "trackId": "4VqPOruhp5EdPBeR92t6lQ",
-      "isPlayable": true,
-      "isAvailable": true,
-      "track": {
-        "name": "Don't Stop Believin'",
-        "artistName": "Journey",
-        "albumName": "Escape",
-        "durationMs": 251000,
-        "previewUrl": "https://p.scdn.co/mp3-preview/..."
-      }
-    },
-    {
-      "trackId": "7qiZfU4dY1lWllzX7mPBI3",
-      "isPlayable": false,
-      "isAvailable": false,
-      "error": "Track not available in user's region"
-    }
-  ],
-  "summary": {
-    "totalTracks": 2,
-    "playableTracks": 1,
-    "unavailableTracks": 1
-  }
-}
-```
-
-## Quiz Generation Process
-
-### Content Generation Flow
-1. **Prompt Analysis**: AI analyzes user prompt for music topics, genres, artists
-2. **Question Generation**: AI creates questions based on prompt context
-3. **Track Search**: System searches Spotify for relevant tracks
-4. **Track Validation**: Verify tracks are playable in user's region
-5. **Content Assembly**: Combine questions with validated tracks
-6. **Quality Check**: Ensure appropriate content and answer accuracy
-
-### Performance Targets
-- **Generation Time**: <5 seconds for 10-question quiz
-- **Track Match Rate**: >80% of questions with audio when requested
-- **Content Quality**: AI-generated content filtered for appropriateness
-
-### Error Handling
-- **AI Service Failure**: Fallback to text-only questions
-- **Track Unavailability**: Alternative tracks or text-only format
-- **Rate Limits**: Queue requests and provide estimated wait time
-- **Content Issues**: Manual review flag for inappropriate content
+- Content generation, Spotify track search/validation, and quality checks happen server-side; responses include only validated tracks.
+- Performance targets and operational guarantees may vary; handle 500 errors with retries or surfaced messages.
 
 ## Rate Limiting
 
-### Limits per User
-- **Quiz Generation**: 10 per hour, 50 per day
-- **Quiz Retrieval**: 300 per hour
-- **Track Validation**: 100 per hour
+Current limits (subject to change)
+- Quiz generation: 10/hour (headers included on responses)
+- Quiz retrieval (my-quizzes): 300/hour (headers included on responses)
 
-### Rate Limit Response (429 Too Many Requests)
+429 Too Many Requests
 ```json
 {
   "error": "rate_limit_exceeded",
-  "message": "Quiz generation limit exceeded. Try again in 1 hour.",
+  "message": "Limit exceeded. Try again later.",
   "correlationId": "abc-123-def",
   "retryAfter": 3600
 }

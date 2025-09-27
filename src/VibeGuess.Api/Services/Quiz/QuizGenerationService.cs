@@ -115,7 +115,7 @@ public class QuizGenerationService : IQuizGenerationService
                 if (!string.IsNullOrEmpty(questionData.TrackInfo?.TrackName) && 
                     !string.IsNullOrEmpty(questionData.TrackInfo?.ArtistName))
                 {
-                    var track = await FindSpotifyTrack(questionData.TrackInfo.TrackName, questionData.TrackInfo.ArtistName);
+                    var track = await FindSpotifyTrackWithRetry(questionData.TrackInfo.TrackName, questionData.TrackInfo.ArtistName);
                     if (track != null)
                     {
                         question.Track = track;
@@ -186,8 +186,19 @@ public class QuizGenerationService : IQuizGenerationService
     {
         try
         {
-            var systemPrompt = CreateSystemPrompt(request);
-            var userPrompt = CreateUserPrompt(request);
+            // Generate buffer questions (50% more) to account for quality filtering and track validation failures
+            var bufferRequest = new QuizGenerationRequest
+            {
+                Prompt = request.Prompt,
+                QuestionCount = Math.Max(request.QuestionCount + 5, (int)(request.QuestionCount * 1.5)), // At least 5 extra, or 50% more
+                Difficulty = request.Difficulty,
+                Format = request.Format,
+                Language = request.Language,
+                IncludeAudio = request.IncludeAudio
+            };
+
+            var systemPrompt = CreateSystemPrompt(bufferRequest);
+            var userPrompt = CreateUserPrompt(bufferRequest);
 
             var requestBody = new
             {
@@ -197,7 +208,7 @@ public class QuizGenerationService : IQuizGenerationService
                     new { role = "system", content = systemPrompt },
                     new { role = "user", content = userPrompt }
                 },
-                max_completion_tokens = 4000,
+                max_completion_tokens = 5000, // Increased for more questions
                 temperature = 0.7
             };
 
@@ -222,7 +233,16 @@ public class QuizGenerationService : IQuizGenerationService
                 var message = firstChoice.GetProperty("message");
                 var aiResponse = message.GetProperty("content").GetString();
 
-                return ParseOpenAIResponse(aiResponse);
+                var quizData = ParseOpenAIResponse(aiResponse);
+                
+                // Log the buffer generation results
+                if (quizData?.Questions != null)
+                {
+                    _logger.LogInformation("Generated {GeneratedCount} questions (requested {RequestedCount} plus buffer) for target of {TargetCount}", 
+                        quizData.Questions.Count, bufferRequest.QuestionCount, request.QuestionCount);
+                }
+
+                return quizData;
             }
 
             return null;
@@ -238,6 +258,8 @@ public class QuizGenerationService : IQuizGenerationService
     {
         return $@"You are a music quiz generator. Create engaging music quiz questions based on user prompts.
 
+CRITICAL: All songs MUST be real, well-known tracks that exist on Spotify. Use mainstream artists and their popular songs.
+
 Rules:
 1. Generate exactly {request.QuestionCount} questions
 2. Format: {request.Format}
@@ -245,8 +267,37 @@ Rules:
 4. Include audio tracks when possible: {request.IncludeAudio}
 5. Each question should have 4 multiple choice options with exactly one correct answer
 6. Include hints and brief explanations
-7. Focus on real songs, artists, albums, and music history
-8. Provide specific track and artist names for suited for Spotify lookup
+7. Focus on REAL songs, artists, albums, and music history - NO fictional content
+8. Use EXACT track and artist names as they appear on Spotify (no nicknames or variations)
+9. Prioritize well-known songs over deep cuts to ensure Spotify availability
+10. Use standard English characters only (avoid special characters, emojis, or non-ASCII text)
+
+QUESTION VARIETY REQUIREMENTS:
+NEVER include the song title or obvious lyrics in the question text. Create diverse question types:
+
+- Release year questions: ""In what year was this song by [Artist] released?"" 
+- Album questions: ""Which album features this song by [Artist]?""
+- Artist identification: ""Who performed this hit song from [year/album]?""
+- Chart performance: ""This [Artist] song reached #[X] on the Billboard Hot 100 in [year]. What song is it?""
+- Collaboration questions: ""Which artist collaborated with [Artist] on this [year] hit?""
+- Genre/style questions: ""This [genre] song by [Artist] became a hit in [year]. What is it?""
+- Award questions: ""Which [Artist] song won [award] in [year]?""
+- Cover/original questions: ""This song was originally performed by [Artist] in [year]. What is the title?""
+- Soundtrack questions: ""Which [Artist] song was featured in the movie [Film]?""
+- Band member questions: ""Which song marked [member]'s debut with [Band]?""
+
+FORBIDDEN QUESTION PATTERNS:
+❌ ""What song contains the lyrics '[exact lyrics]'?"" 
+❌ ""Complete this lyric: '[song title lyrics]'""
+❌ ""What song starts with '[first line that contains title]'?""
+❌ Any question where the song title appears in the question text
+
+TRACK SELECTION GUIDELINES:
+- Use chart hits, popular songs, and widely-known tracks
+- Prefer main releases over remixes or special editions  
+- Use primary artist names (avoid ""feat."" or multiple artists when possible)
+- Use official song titles without subtitles in parentheses
+- Double-check that artist and song combinations are real and correct
 
 Response format (JSON):
 {{
@@ -277,15 +328,38 @@ Response format (JSON):
     {
         var difficultyGuidance = request.Difficulty.ToLower() switch
         {
-            "easy" => "Focus on very well-known songs and mainstream artists that most people would recognize.",
-            "medium" => "Include a mix of popular and moderately obscure songs. Some deep cuts are okay.",
-            "hard" => "Include challenging questions about B-sides, album tracks, music theory, and lesser-known facts.",
-            _ => "Use moderate difficulty with popular songs and artists."
+            "easy" => "Focus on chart-topping hits and mainstream artists from the past 20 years that are definitely on Spotify. Use basic facts (release years, album names, well-known collaborations).",
+            "medium" => "Include a mix of popular songs and well-known album tracks. Use more detailed facts (chart positions, awards, movie soundtracks). Stick to established artists with confirmed Spotify presence.",
+            "hard" => "Include more challenging questions about music history, band lineups, and detailed discography facts. Still use real, verifiable songs that exist on Spotify. Avoid extremely obscure tracks.",
+            _ => "Use popular songs from well-known artists that are widely available on Spotify."
         };
 
         return $@"Create a music quiz based on this prompt: ""{request.Prompt}""
 
 Difficulty guidance: {difficultyGuidance}
+
+EXAMPLE QUESTION TYPES TO USE:
+✅ ""In what year did Taylor Swift release this Grammy-winning song?""
+✅ ""Which Coldplay album features this hit single from 2008?""  
+✅ ""Who performed this Billboard #1 hit from 1995?""
+✅ ""This Eminem song was featured in which movie soundtrack?""
+✅ ""Which band member wrote this Fleetwood Mac classic?""
+✅ ""This song by The Weeknd reached what peak position on the Billboard Hot 100?""
+
+AVOID THESE PATTERNS:
+❌ ""What song contains the lyrics 'I want it that way'?""
+❌ ""Complete this lyric from Bohemian Rhapsody: 'Is this the real ___'?""
+❌ ""What Backstreet Boys song starts with 'You are my fire'?""
+
+CRITICAL REQUIREMENTS:
+- ALL songs MUST be real tracks available on Spotify
+- NEVER include song titles or obvious lyrics in question text
+- Create diverse question types (release years, albums, chart positions, collaborations, awards, soundtracks, etc.)
+- Use EXACT artist names and song titles as they appear on Spotify  
+- Prioritize mainstream, well-known tracks over obscure ones
+- Verify track/artist combinations are correct (no made-up pairings)
+- Use primary artist names (main performer, not featuring artists)
+- Use official track titles (no remixes, live versions, or alternate titles unless specified)
 
 Make sure to:
 - Use real, verifiable songs and artists
@@ -295,6 +369,96 @@ Make sure to:
 - Ensure all answer options are plausible
 
 Respond only with valid JSON in the specified format.";
+    }
+
+    private bool ValidateQuestionQuality(GeneratedQuestion question)
+    {
+        if (question?.QuestionText == null || question.TrackInfo?.TrackName == null)
+            return false;
+
+        var questionText = question.QuestionText.ToLowerInvariant();
+        var trackName = question.TrackInfo.TrackName.ToLowerInvariant();
+        var artistName = question.TrackInfo.ArtistName?.ToLowerInvariant() ?? "";
+
+        // Forbidden patterns that give away the answer
+        var forbiddenPatterns = new[]
+        {
+            "what song contains the lyrics",
+            "complete this lyric",
+            "which song starts with",
+            "this lyric is from",
+            "what song has the lyric",
+            "fill in the blank",
+            "what are the next lyrics",
+            "which song includes the lyrics",
+            "what song features the line"
+        };
+
+        // Check if question contains forbidden patterns
+        foreach (var pattern in forbiddenPatterns)
+        {
+            if (questionText.Contains(pattern))
+                return false;
+        }
+
+        // Check if the track title appears in the question (major giveaway)
+        var trackWords = trackName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (trackWords.Length > 1)
+        {
+            // Check if a significant portion of the track name appears in question
+            var matchingWords = trackWords.Count(word => 
+                word.Length > 2 && questionText.Contains(word));
+            
+            if (matchingWords >= trackWords.Length / 2)
+                return false;
+        }
+        else if (trackWords.Length == 1 && trackWords[0].Length > 3)
+        {
+            // Single word track name
+            if (questionText.Contains(trackWords[0]))
+                return false;
+        }
+
+        // Check if artist name appears in question when it shouldn't
+        if (!string.IsNullOrEmpty(artistName))
+        {
+            var artistWords = artistName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var word in artistWords)
+            {
+                if (word.Length > 3 && questionText.Contains(word))
+                {
+                    // Allow artist name if it's asking about the artist specifically
+                    if (!questionText.Contains("who") && !questionText.Contains("which artist"))
+                        return false;
+                }
+            }
+        }
+
+        // Ensure question has good educational value
+        var goodPatterns = new[]
+        {
+            "what year",
+            "which album",
+            "what album",
+            "which movie", 
+            "what soundtrack",
+            "who performed",
+            "who sang",
+            "which band",
+            "what position",
+            "how many",
+            "which chart",
+            "what award",
+            "which grammy",
+            "what genre",
+            "who wrote",
+            "who produced",
+            "which label",
+            "what decade"
+        };
+
+        var hasGoodPattern = goodPatterns.Any(pattern => questionText.Contains(pattern));
+        return hasGoodPattern;
     }
 
     private GeneratedQuizData? ParseOpenAIResponse(string? aiResponse)
@@ -324,7 +488,25 @@ Respond only with valid JSON in the specified format.";
                 PropertyNameCaseInsensitive = true
             };
 
-            return JsonSerializer.Deserialize<GeneratedQuizData>(cleanedResponse, options);
+            var quizData = JsonSerializer.Deserialize<GeneratedQuizData>(cleanedResponse, options);
+            
+            // Filter out low-quality questions
+            if (quizData?.Questions != null)
+            {
+                var originalCount = quizData.Questions.Count;
+                quizData.Questions = quizData.Questions
+                    .Where(ValidateQuestionQuality)
+                    .ToList();
+                
+                var filteredCount = originalCount - quizData.Questions.Count;
+                if (filteredCount > 0)
+                {
+                    _logger.LogInformation("Filtered out {FilteredCount} low-quality questions out of {OriginalCount}", 
+                        filteredCount, originalCount);
+                }
+            }
+
+            return quizData;
         }
         catch (JsonException ex)
         {
@@ -333,11 +515,11 @@ Respond only with valid JSON in the specified format.";
         }
     }
 
-    private async Task<Track?> FindSpotifyTrack(string trackName, string artistName)
+    private async Task<Track?> FindSpotifyTrackWithRetry(string trackName, string artistName)
     {
         try
         {
-            _logger.LogInformation("Looking for track: {Artist} - {Track}", artistName, trackName);
+            _logger.LogInformation("Looking for track with retry: {Artist} - {Track}", artistName, trackName);
 
             // Step 1: Check if track already exists in database
             var existingTracks = await _unitOfWork.Tracks.SearchAsync($"{artistName} {trackName}");
@@ -352,8 +534,40 @@ Respond only with valid JSON in the specified format.";
                 return exactMatch;
             }
 
-            // Step 2: Search Spotify API for the track
-            var spotifyTrack = await _spotifyApiService.SearchTrackAsync(trackName, artistName);
+            // Step 2: Multiple search strategies for Spotify API
+            var searchStrategies = new[]
+            {
+                "Exact",
+                "Standard", 
+                "Simplified"
+            };
+
+            Track? spotifyTrack = null;
+            string? successfulStrategy = null;
+
+            foreach (var strategy in searchStrategies)
+            {
+                try
+                {
+                    _logger.LogInformation("Trying search strategy '{Strategy}' for {Artist} - {Track}", strategy, artistName, trackName);
+                    
+                    // Apply strategy-specific modifications to search terms
+                    var (searchTrackName, searchArtistName) = ApplySearchStrategy(strategy, trackName, artistName);
+                    
+                    spotifyTrack = await _spotifyApiService.SearchTrackAsync(searchTrackName, searchArtistName);
+                    
+                    if (spotifyTrack != null)
+                    {
+                        successfulStrategy = strategy;
+                        _logger.LogInformation("Strategy '{Strategy}' found track: {SpotifyId}", strategy, spotifyTrack.SpotifyTrackId);
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Strategy '{Strategy}' failed for {Artist} - {Track}", strategy, artistName, trackName);
+                }
+            }
             
             if (spotifyTrack != null)
             {
@@ -361,7 +575,8 @@ Respond only with valid JSON in the specified format.";
                 var existingBySpotifyId = await _unitOfWork.Tracks.GetBySpotifyTrackIdAsync(spotifyTrack.SpotifyTrackId);
                 if (existingBySpotifyId != null)
                 {
-                    _logger.LogInformation("Found existing Spotify track in database: {SpotifyId}", spotifyTrack.SpotifyTrackId);
+                    _logger.LogInformation("Found existing Spotify track in database: {SpotifyId} (found via {Strategy})", 
+                        spotifyTrack.SpotifyTrackId, successfulStrategy);
                     return existingBySpotifyId;
                 }
 
@@ -369,43 +584,43 @@ Respond only with valid JSON in the specified format.";
                 var savedTrack = await _unitOfWork.Tracks.AddAsync(spotifyTrack);
                 await _unitOfWork.SaveChangesAsync();
                 
-                _logger.LogInformation("Saved new Spotify track: {SpotifyId} - {Artist} - {Track}", 
-                    savedTrack.SpotifyTrackId, savedTrack.ArtistName, savedTrack.Name);
+                _logger.LogInformation("Saved new Spotify track: {SpotifyId} - {Artist} - {Track} (found via {Strategy})", 
+                    savedTrack.SpotifyTrackId, savedTrack.ArtistName, savedTrack.Name, successfulStrategy);
                 
                 return savedTrack;
             }
 
-            // Step 5: If Spotify API fails, create a mock track for fallback
-            _logger.LogWarning("Spotify API search failed for {Artist} - {Track}, creating mock track", artistName, trackName);
-            
-            var mockTrack = new Track
-            {
-                Id = Guid.NewGuid(),
-                SpotifyTrackId = $"mock:track:{Guid.NewGuid():N}",
-                Name = trackName,
-                ArtistName = artistName,
-                AlbumName = "Unknown Album",
-                DurationMs = 180000, // Default 3 minutes
-                Popularity = 50, // Medium popularity
-                IsExplicit = false,
-                PreviewUrl = null,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            // Save mock track to avoid repeated API calls for the same failed search
-            var savedMockTrack = await _unitOfWork.Tracks.AddAsync(mockTrack);
-            await _unitOfWork.SaveChangesAsync();
-
-            _logger.LogInformation("Created and saved mock track: {TrackId} - {Artist} - {Track}", 
-                savedMockTrack.Id, artistName, trackName);
-            
-            return savedMockTrack;
+            // Step 5: All strategies failed - track not found
+            _logger.LogWarning("All search strategies failed for {Artist} - {Track}, track not available on Spotify", artistName, trackName);
+            return null;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error finding/creating track for {Artist} - {Track}", artistName, trackName);
+            _logger.LogError(ex, "Error finding Spotify track with retry for {Artist} - {Track}", artistName, trackName);
             return null;
         }
+    }
+
+    private (string trackName, string artistName) ApplySearchStrategy(string strategyName, string originalTrackName, string originalArtistName)
+    {
+        return strategyName switch
+        {
+            "Exact" => (originalTrackName, originalArtistName),
+            "Standard" => (originalTrackName.Trim(), originalArtistName.Trim()),
+            "Simplified" => (SimplifySearchTerm(originalTrackName), SimplifySearchTerm(originalArtistName)),
+            _ => (originalTrackName, originalArtistName)
+        };
+    }
+
+    private string SimplifySearchTerm(string term)
+    {
+        if (string.IsNullOrEmpty(term))
+            return term;
+            
+        // Remove common special characters that might interfere with search
+        return System.Text.RegularExpressions.Regex.Replace(term, @"[^\w\s]", " ")
+            .Trim()
+            .Replace("  ", " "); // Replace double spaces with single space
     }
 }
 
