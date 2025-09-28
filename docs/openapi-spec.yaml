@@ -1,0 +1,740 @@
+openapi: 3.0.3
+info:
+  title: VibeGuess Live Quiz Sessions API
+  description: |
+    REST API for managing live quiz sessions in VibeGuess. 
+    
+    This API provides supplementary endpoints for session lifecycle management.
+    Primary real-time interaction happens via SignalR WebSocket at `/hubs/hostedquiz`.
+    
+    ## Authentication
+    Currently no authentication required for public demo. Production will require JWT authentication.
+    
+    ## Rate Limiting
+    - 5 requests per minute per IP address
+    - Rate limit headers included in all responses
+    
+    ## Session States
+    - **Lobby**: Session created, participants can join
+    - **Active**: Game in progress, questions being asked
+    - **Paused**: Game temporarily paused by host
+    - **Completed**: Game finished, results available
+  version: 1.0.0
+  contact:
+    name: VibeGuess API Support
+    url: https://github.com/johahert/vibeguess
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://localhost:7009/api
+    description: Development server (HTTPS)
+  - url: http://localhost:5087/api
+    description: Development server (HTTP)
+
+paths:
+  /hosted-sessions:
+    post:
+      summary: Create hosted quiz session
+      description: |
+        Creates a new live quiz session that participants can join using a generated join code.
+        
+        The session starts in "Lobby" state where participants can join. The host must use
+        SignalR methods to start the game and manage questions.
+        
+        ## Business Rules
+        - Join codes are 6-character alphanumeric (excluding confusing characters)
+        - Sessions auto-expire based on state (2h lobby, 1h active, 30m completed)
+        - Question time limit must be between 10-300 seconds
+      operationId: createHostedSession
+      tags:
+        - Hosted Sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHostedSessionRequest'
+            examples:
+              basic_session:
+                summary: Basic session creation
+                value:
+                  quizId: "quiz-123"
+                  title: "Friday Music Quiz"
+                  questionTimeLimit: 30
+              extended_session:
+                summary: Extended time limit session
+                value:
+                  quizId: "advanced-quiz-456"
+                  title: "Advanced Music Theory Quiz"
+                  questionTimeLimit: 60
+      responses:
+        '200':
+          description: Session created successfully
+          headers:
+            X-Correlation-ID:
+              schema:
+                type: string
+              description: Request correlation ID for tracking
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+              description: Number of requests remaining in current window
+            X-RateLimit-Reset:
+              schema:
+                type: integer
+              description: Unix timestamp when rate limit resets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateHostedSessionResponse'
+              examples:
+                success_response:
+                  summary: Successful session creation
+                  value:
+                    sessionId: "session-550e8400-e29b-41d4-a716-446655440000"
+                    joinCode: "ABC123"
+                    title: "Friday Music Quiz"
+                    state: "Lobby"
+                    createdAt: "2025-09-28T10:30:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimit'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /hosted-sessions/{joinCode}:
+    get:
+      summary: Get session information by join code
+      description: |
+        Retrieves current information about a live session using its join code.
+        
+        This endpoint is useful for:
+        - Validating join codes before connecting via SignalR
+        - Displaying session info in lobbies
+        - Checking session state before attempting to join
+        
+        ## Session States
+        - **Lobby**: Session accepting new participants
+        - **Active**: Game in progress, may still accept late joiners
+        - **Paused**: Game temporarily stopped, no new participants
+        - **Completed**: Game finished, no new participants
+      operationId: getSessionInfo
+      tags:
+        - Hosted Sessions
+      parameters:
+        - name: joinCode
+          in: path
+          required: true
+          description: 6-character session join code
+          schema:
+            type: string
+            pattern: '^[A-Z0-9]{6}$'
+            example: "ABC123"
+      responses:
+        '200':
+          description: Session information retrieved successfully
+          headers:
+            X-Correlation-ID:
+              schema:
+                type: string
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostedSessionInfoResponse'
+              examples:
+                lobby_session:
+                  summary: Session in lobby state
+                  value:
+                    sessionId: "session-550e8400-e29b-41d4-a716-446655440000"
+                    joinCode: "ABC123"
+                    title: "Friday Music Quiz"
+                    state: "Lobby"
+                    currentQuestionIndex: 0
+                    participantCount: 3
+                    createdAt: "2025-09-28T10:30:00Z"
+                    startedAt: null
+                    endedAt: null
+                    questionTimeLimit: 30
+                    participants:
+                      - participantId: "participant-123"
+                        displayName: "Alice"
+                        score: 0
+                        correctAnswers: 0
+                        totalAnswers: 0
+                        isConnected: true
+                        joinedAt: "2025-09-28T10:32:00Z"
+                        accuracy: 0
+                active_session:
+                  summary: Session in active state
+                  value:
+                    sessionId: "session-550e8400-e29b-41d4-a716-446655440000"
+                    joinCode: "ABC123"
+                    title: "Friday Music Quiz"
+                    state: "Active"
+                    currentQuestionIndex: 3
+                    participantCount: 5
+                    createdAt: "2025-09-28T10:30:00Z"
+                    startedAt: "2025-09-28T10:35:00Z"
+                    endedAt: null
+                    questionTimeLimit: 30
+                    participants:
+                      - participantId: "participant-123"
+                        displayName: "Alice"
+                        score: 250
+                        correctAnswers: 2
+                        totalAnswers: 3
+                        isConnected: true
+                        joinedAt: "2025-09-28T10:32:00Z"
+                        accuracy: 66.67
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimit'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /hosted-sessions/{sessionId}/summary:
+    get:
+      summary: Get session analytics summary
+      description: |
+        Retrieves comprehensive analytics and statistics for a session.
+        
+        This endpoint is primarily intended for completed sessions but will work
+        with active sessions to provide current statistics.
+        
+        ## Use Cases
+        - Post-game analytics dashboard
+        - Performance tracking and insights  
+        - Historical session data
+        - Exporting results
+        
+        ## Analytics Included
+        - Overall session statistics
+        - Final leaderboard (top 20 participants)
+        - Per-question performance metrics
+        - Timing and accuracy analysis
+      operationId: getSessionSummary
+      tags:
+        - Hosted Sessions
+        - Analytics
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: Unique session identifier (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: "session-550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Session summary retrieved successfully
+          headers:
+            X-Correlation-ID:
+              schema:
+                type: string
+            X-RateLimit-Remaining:
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSummaryResponse'
+              examples:
+                completed_session:
+                  summary: Completed session with full analytics
+                  value:
+                    sessionId: "session-550e8400-e29b-41d4-a716-446655440000"
+                    title: "Friday Music Quiz"
+                    createdAt: "2025-09-28T10:30:00Z"
+                    startedAt: "2025-09-28T10:35:00Z"
+                    endedAt: "2025-09-28T10:50:00Z"
+                    duration: "PT15M"
+                    stats:
+                      totalParticipants: 5
+                      totalQuestions: 10
+                      totalAnswers: 48
+                      averageScore: 180.5
+                      averageAccuracy: 72.5
+                      averageResponseTime: "PT8S"
+                    finalLeaderboard:
+                      - participantId: "participant-123"
+                        displayName: "Alice"
+                        score: 450
+                        correctAnswers: 8
+                        totalAnswers: 10
+                        isConnected: true
+                        joinedAt: "2025-09-28T10:32:00Z"
+                        accuracy: 80.0
+                      - participantId: "participant-456"
+                        displayName: "Bob"
+                        score: 320
+                        correctAnswers: 6
+                        totalAnswers: 10
+                        isConnected: true
+                        joinedAt: "2025-09-28T10:33:00Z"
+                        accuracy: 60.0
+                    questionStats:
+                      - questionIndex: 0
+                        totalAnswers: 5
+                        correctAnswers: 3
+                        accuracyPercentage: 60.0
+                        averageResponseTime: "PT12S"
+                      - questionIndex: 1
+                        totalAnswers: 5
+                        correctAnswers: 4
+                        accuracyPercentage: 80.0
+                        averageResponseTime: "PT8S"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimit'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  schemas:
+    CreateHostedSessionRequest:
+      type: object
+      required:
+        - quizId
+        - title
+      properties:
+        quizId:
+          type: string
+          maxLength: 100
+          description: Unique identifier of the quiz to host
+          example: "quiz-123"
+        title:
+          type: string
+          maxLength: 200
+          description: Human-readable title for the session
+          example: "Friday Music Quiz"
+        questionTimeLimit:
+          type: integer
+          minimum: 10
+          maximum: 300
+          default: 30
+          description: Time limit per question in seconds
+          example: 45
+
+    CreateHostedSessionResponse:
+      type: object
+      required:
+        - sessionId
+        - joinCode
+        - title
+        - state
+        - createdAt
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: Unique session identifier
+          example: "session-550e8400-e29b-41d4-a716-446655440000"
+        joinCode:
+          type: string
+          pattern: '^[A-Z0-9]{6}$'
+          description: 6-character code for participants to join
+          example: "ABC123"
+        title:
+          type: string
+          description: Session title
+          example: "Friday Music Quiz"
+        state:
+          $ref: '#/components/schemas/SessionState'
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of session creation
+          example: "2025-09-28T10:30:00Z"
+
+    HostedSessionInfoResponse:
+      type: object
+      required:
+        - sessionId
+        - joinCode
+        - title
+        - state
+        - currentQuestionIndex
+        - participantCount
+        - createdAt
+        - questionTimeLimit
+        - participants
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: Unique session identifier
+          example: "session-550e8400-e29b-41d4-a716-446655440000"
+        joinCode:
+          type: string
+          pattern: '^[A-Z0-9]{6}$'
+          description: 6-character join code
+          example: "ABC123"
+        title:
+          type: string
+          description: Session title
+          example: "Friday Music Quiz"
+        state:
+          $ref: '#/components/schemas/SessionState'
+        currentQuestionIndex:
+          type: integer
+          minimum: 0
+          description: Index of current question (0-based)
+          example: 2
+        participantCount:
+          type: integer
+          minimum: 0
+          description: Total number of participants
+          example: 5
+        createdAt:
+          type: string
+          format: date-time
+          description: Session creation timestamp
+          example: "2025-09-28T10:30:00Z"
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Game start timestamp
+          example: "2025-09-28T10:35:00Z"
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Game end timestamp
+          example: null
+        questionTimeLimit:
+          type: integer
+          description: Time limit per question in seconds
+          example: 30
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantSummary'
+
+    SessionSummaryResponse:
+      type: object
+      required:
+        - sessionId
+        - title
+        - createdAt
+        - stats
+        - finalLeaderboard
+        - questionStats
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          example: "session-550e8400-e29b-41d4-a716-446655440000"
+        title:
+          type: string
+          example: "Friday Music Quiz"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-09-28T10:30:00Z"
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2025-09-28T10:35:00Z"
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2025-09-28T10:50:00Z"
+        duration:
+          type: string
+          format: duration
+          nullable: true
+          description: Session duration in ISO 8601 format
+          example: "PT15M"
+        stats:
+          $ref: '#/components/schemas/SessionStats'
+        finalLeaderboard:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ParticipantSummary'
+          description: Top 20 participants by score
+        questionStats:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionStats'
+
+    ParticipantSummary:
+      type: object
+      required:
+        - participantId
+        - displayName
+        - score
+        - correctAnswers
+        - totalAnswers
+        - isConnected
+        - joinedAt
+        - accuracy
+      properties:
+        participantId:
+          type: string
+          format: uuid
+          description: Unique participant identifier
+          example: "participant-123"
+        displayName:
+          type: string
+          maxLength: 50
+          description: Participant's display name
+          example: "Alice"
+        score:
+          type: integer
+          minimum: 0
+          description: Total accumulated score
+          example: 450
+        correctAnswers:
+          type: integer
+          minimum: 0
+          description: Number of correct answers
+          example: 8
+        totalAnswers:
+          type: integer
+          minimum: 0
+          description: Total number of answers submitted
+          example: 10
+        isConnected:
+          type: boolean
+          description: Whether participant is currently connected
+          example: true
+        joinedAt:
+          type: string
+          format: date-time
+          description: When participant joined the session
+          example: "2025-09-28T10:32:00Z"
+        accuracy:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Answer accuracy percentage
+          example: 80.0
+
+    SessionStats:
+      type: object
+      required:
+        - totalParticipants
+        - totalQuestions
+        - totalAnswers
+        - averageScore
+        - averageAccuracy
+        - averageResponseTime
+      properties:
+        totalParticipants:
+          type: integer
+          minimum: 0
+          description: Total number of participants who joined
+          example: 5
+        totalQuestions:
+          type: integer
+          minimum: 0
+          description: Total number of questions asked
+          example: 10
+        totalAnswers:
+          type: integer
+          minimum: 0
+          description: Total answers submitted across all participants
+          example: 48
+        averageScore:
+          type: number
+          format: double
+          minimum: 0
+          description: Average score across all participants
+          example: 180.5
+        averageAccuracy:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Average accuracy percentage across all participants
+          example: 72.5
+        averageResponseTime:
+          type: string
+          format: duration
+          description: Average response time in ISO 8601 duration format
+          example: "PT8S"
+
+    QuestionStats:
+      type: object
+      required:
+        - questionIndex
+        - totalAnswers
+        - correctAnswers
+        - accuracyPercentage
+        - averageResponseTime
+      properties:
+        questionIndex:
+          type: integer
+          minimum: 0
+          description: Question index (0-based)
+          example: 0
+        totalAnswers:
+          type: integer
+          minimum: 0
+          description: Number of participants who answered this question
+          example: 5
+        correctAnswers:
+          type: integer
+          minimum: 0
+          description: Number of correct answers for this question
+          example: 3
+        accuracyPercentage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Percentage of correct answers for this question
+          example: 60.0
+        averageResponseTime:
+          type: string
+          format: duration
+          description: Average response time for this question
+          example: "PT12S"
+
+    SessionState:
+      type: string
+      enum: [Lobby, Active, Paused, Completed]
+      description: Current state of the session
+      example: "Lobby"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - correlationId
+      properties:
+        error:
+          type: string
+          description: Error code for programmatic handling
+          example: "invalid_request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Invalid request parameters"
+        correlationId:
+          type: string
+          description: Request correlation ID for tracking
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+  responses:
+    BadRequest:
+      description: Bad request - Invalid input parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_parameters:
+              summary: Invalid request parameters
+              value:
+                error: "invalid_request"
+                message: "Invalid request parameters"
+                correlationId: "550e8400-e29b-41d4-a716-446655440000"
+            missing_required_field:
+              summary: Missing required field
+              value:
+                error: "validation_failed"
+                message: "The quizId field is required"
+                correlationId: "550e8400-e29b-41d4-a716-446655440001"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            session_not_found:
+              summary: Session not found
+              value:
+                error: "not_found"
+                message: "Session not found"
+                correlationId: "550e8400-e29b-41d4-a716-446655440002"
+
+    RateLimit:
+      description: Rate limit exceeded
+      headers:
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+            example: 0
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+            example: 1696000000
+        Retry-After:
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "rate_limit_exceeded"
+            message: "Too many requests. Please try again later."
+            correlationId: "550e8400-e29b-41d4-a716-446655440003"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            generic_error:
+              summary: Generic internal error
+              value:
+                error: "internal_error"
+                message: "An unexpected error occurred"
+                correlationId: "550e8400-e29b-41d4-a716-446655440004"
+            redis_connection_error:
+              summary: Redis connection failure
+              value:
+                error: "service_unavailable"
+                message: "Session service temporarily unavailable"
+                correlationId: "550e8400-e29b-41d4-a716-446655440005"
+
+  securitySchemes:
+    # Currently no authentication required for demo
+    # In production, JWT Bearer authentication will be required
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT Bearer token (not currently required)
+
+# No security applied for demo purposes
+# security:
+#   - bearerAuth: []
+
+tags:
+  - name: Hosted Sessions
+    description: Live quiz session lifecycle management
+  - name: Analytics
+    description: Session statistics and performance analytics
