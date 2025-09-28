@@ -22,6 +22,7 @@ public static class RepositoryServiceExtensions
         services.AddScoped<IQuizSessionRepository, QuizSessionRepository>();
         services.AddScoped<ITrackRepository, TrackRepository>();
         services.AddScoped<ISpotifyTokenRepository, SpotifyTokenRepository>();
+        services.AddScoped<VibeGuess.Core.Interfaces.ISessionSummaryRepository, VibeGuess.Infrastructure.Repositories.SessionSummaryRepository>();
 
         // Register unit of work
         services.AddScoped<IUnitOfWork, UnitOfWork>();

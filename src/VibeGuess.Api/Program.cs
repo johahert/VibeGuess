@@ -47,7 +47,7 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Enhanced CORS configuration for React development
+// Enhanced CORS configuration for React development and SignalR
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("ReactDevelopment", policy =>
@@ -60,7 +60,7 @@ builder.Services.AddCors(options =>
                 "https://localhost:5173")
               .AllowAnyMethod()
               .AllowAnyHeader()
-              .AllowCredentials()
+              .AllowCredentials()  // Required for SignalR
               .SetPreflightMaxAge(TimeSpan.FromHours(1)); // Cache preflight responses
     });
 
@@ -70,7 +70,7 @@ builder.Services.AddCors(options =>
         policy.SetIsOriginAllowed(_ => true)
               .AllowAnyMethod()
               .AllowAnyHeader()
-              .AllowCredentials();
+              .AllowCredentials(); // Required for SignalR
     });
 });
 
@@ -203,6 +203,20 @@ builder.Services.AddDbContext<VibeGuessDbContext>(options =>
 // Add repositories
 builder.Services.AddRepositories();
 
+// Add Redis distributed cache for live sessions
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+    options.InstanceName = "VibeGuess";
+});
+
+// Add SignalR with Redis backplane
+builder.Services.AddSignalR()
+    .AddStackExchangeRedis(builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379");
+
+// Add live session manager
+builder.Services.AddScoped<VibeGuess.Core.Interfaces.ILiveSessionManager, VibeGuess.Infrastructure.Services.LiveSessionManager>();
+
 // Add authentication services
 builder.Services.AddSpotifyAuthentication(builder.Configuration);
 
@@ -230,6 +244,9 @@ app.UseAuthorization();
 
 // Map controllers
 app.MapControllers();
+
+// Map SignalR hubs
+app.MapHub<VibeGuess.Api.Hubs.HostedQuizHub>("/hubs/hostedquiz");
 
 // Log the configuration for debugging
 if (app.Environment.IsDevelopment())

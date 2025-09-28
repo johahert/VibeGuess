@@ -29,6 +29,9 @@ public class VibeGuessDbContext : DbContext
     // Session Management  
     public DbSet<QuizSession> QuizSessions { get; set; } = null!;
     public DbSet<UserAnswer> UserAnswers { get; set; } = null!;
+    
+    // Live Session Analytics (Optional persistence)
+    public DbSet<SessionSummary> SessionSummaries { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -45,6 +48,7 @@ public class VibeGuessDbContext : DbContext
         modelBuilder.ApplyConfiguration(new TrackConfiguration());
         modelBuilder.ApplyConfiguration(new QuizSessionConfiguration());
         modelBuilder.ApplyConfiguration(new UserAnswerConfiguration());
+        modelBuilder.ApplyConfiguration(new SessionSummaryConfiguration());
 
         // Configure base entity properties globally
         ConfigureBaseEntity(modelBuilder);
