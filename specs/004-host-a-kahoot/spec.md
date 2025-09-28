@@ -46,9 +46,9 @@ As an authenticated quiz creator, I want to host a live music quiz session that 
 2. **Given** players have joined a live session lobby using the code, **When** the host starts the game and advances through questions, **Then** each player must receive the current question in sync and have their answers recorded for scoring and the host must see aggregate progress.
 
 ### Edge Cases
-- What happens when the host disconnects or navigates away during an active session? [NEEDS CLARIFICATION: Should the session pause, transfer, or terminate automatically?]
-- How does the system handle players who join after the host has already started the first question? [NEEDS CLARIFICATION: Allow late entry, spectate, or block?]
-- What happens if two players attempt to join with the same display name? [NEEDS CLARIFICATION: Require unique names or auto-suffix duplicates?]
+- What happens when the host disconnects or navigates away during an active session? The game should have a grace period of a paused quiz for 30 sec, after that room is terminated
+- How does the system handle players who join after the host has already started the first question? Whatever is simplest to implement and handle
+- What happens if two players attempt to join with the same display name? Auto suffix names
 
 ## Requirements *(mandatory)*
 
@@ -57,11 +57,10 @@ As an authenticated quiz creator, I want to host a live music quiz session that 
 - **FR-002**: System MUST allow the host to select an existing quiz and launch a live session that produces a shareable join code or link for players.
 - **FR-003**: System MUST let players join an active lobby without logging in by submitting the join code and a display name.
 - **FR-004**: System MUST provide the host with controls to start the session, advance to the next question, reveal answers, and end the game.
-- **FR-005**: System MUST display each active question to all joined players once the host advances, capturing their responses within the allotted timeframe. [NEEDS CLARIFICATION: Required response window length and whether timing affects scoring.]
-- **FR-006**: System MUST calculate individual player scores based on answer correctness (and timing, if applicable) and keep a running leaderboard visible to the host. [NEEDS CLARIFICATION: Scoring formula and tie-breaker rules.]
-- **FR-007**: System MUST allow the host to remove or mute disruptive players from the session. [NEEDS CLARIFICATION: What actions should be available and whether removed players can rejoin.]
+- **FR-005**: System MUST display each active question to all joined players once the host advances, capturing their responses within the allotted timeframe. The respone length should be adjustable by the host. Scoring should have a high baseline score and a little extra difference for timing
+- **FR-006**: System MUST calculate individual player scores based on answer correctness (and timing, if applicable) and keep a running leaderboard visible to the host. Baseline score for a correct answer is 100 and 1 point for every second left when answering 
+- **FR-007**: System MUST allow the host to remove or mute disruptive players from the session. Removed player should not be able to get back in (blacklisted for the session). The host should be able to remove people from the blacklist
 - **FR-008**: System MUST present a final summary screen to the host and players when the session ends, highlighting top performers and offering an option to restart or close the room.
-- **FR-009**: System MUST persist minimal session analytics (e.g., participation counts, average scores) for the host to review post-game. [NEEDS CLARIFICATION: Exact metrics and retention policy.]
 
 ### Key Entities *(include if feature involves data)*
 - **Live Quiz Session**: Represents a real-time instance of a quiz being hosted; tracks associated quiz, join code, current state (lobby/in-progress/completed), and timestamps.
