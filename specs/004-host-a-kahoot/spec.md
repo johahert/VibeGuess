@@ -1,4 +1,27 @@
-# Feature Specification: Kahoot-Style Hosted Music Quiz Sessions
+# Feature Specification---
+
+## 🔧 Implementation Guidelines
+
+### Architecture Requirements
+- **Real-time Communication**: MUST use SignalR WebSocket connections for all live session interactions
+- **In-Memory State Management**: Session data (participants, scores, game state) MUST be stored in memory/cache only
+- **No Database Persistence**: Live session state, participant data, and real-time answers MUST NOT be persisted to database
+- **Ephemeral Sessions**: Sessions are temporary and do not need to survive server restarts
+- **Optional Result Storage**: Only final quiz results/scores MAY be optionally persisted for historical purposes
+
+### Technical Approach
+- Primary communication via SignalR Hub for real-time WebSocket messaging
+- Session state managed in memory (Redis cache or in-process memory)
+- Minimal REST endpoints only for session creation/management
+- All gameplay interactions through WebSocket events
+
+---
+
+## ⚡ Quick Guidelines
+- ✅ Center the experience on the host's ability to run a smooth live quiz session
+- ✅ Emphasise how players discover, join, and experience each stage of the game
+- ✅ Implement as real-time SignalR application, not traditional CRUD
+- 🎯 Keep language outcome-focused so stakeholders can sign off without technical translationt-Style Hosted Music Quiz Sessions
 
 **Feature Branch**: `004-host-a-kahoot`  
 **Created**: 2025-09-28  
