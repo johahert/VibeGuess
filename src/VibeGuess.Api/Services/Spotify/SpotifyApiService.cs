@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using System.Linq;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -34,11 +35,22 @@ public class SpotifyApiService : ISpotifyApiService
         _logger = logger;
     }
 
-    public async Task<Track?> SearchTrackAsync(string trackName, string artistName, CancellationToken cancellationToken = default)
+    public Task<Track?> SearchTrackAsync(string trackName, string artistName, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(trackName) || string.IsNullOrWhiteSpace(artistName))
+        return SearchTrackAsync(trackName, artistName, allowPartialMatch: false, cancellationToken);
+    }
+
+    public async Task<Track?> SearchTrackAsync(string trackName, string artistName, bool allowPartialMatch, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(trackName))
         {
-            _logger.LogWarning("Invalid search parameters: trackName={TrackName}, artistName={ArtistName}", trackName, artistName);
+            _logger.LogWarning("Invalid search parameters: trackName is required");
+            return null;
+        }
+
+        if (!allowPartialMatch && string.IsNullOrWhiteSpace(artistName))
+        {
+            _logger.LogWarning("Invalid search parameters: artistName is required for strict search (trackName={TrackName})", trackName);
             return null;
         }
 
@@ -55,14 +67,25 @@ public class SpotifyApiService : ISpotifyApiService
             _logger.LogDebug("Using {TokenType} for track search", isUserToken ? "user token" : "client credentials");
 
             // Construct search query with proper escaping
-            var query = Uri.EscapeDataString($"track:\"{trackName}\" artist:\"{artistName}\"");
-            var requestUri = $"{_options.ApiBaseUrl}/search?q={query}&type=track&limit=1";
+            var limit = allowPartialMatch ? 5 : 1;
+            string query;
+            if (allowPartialMatch)
+            {
+                var combined = $"{trackName} {artistName}".Trim();
+                query = Uri.EscapeDataString(combined);
+            }
+            else
+            {
+                query = Uri.EscapeDataString($"track:\"{trackName}\" artist:\"{artistName}\"");
+            }
+
+            var requestUri = $"{_options.ApiBaseUrl}/search?q={query}&type=track&limit={limit}";
 
             // Set authorization header using AuthenticationHeaderValue
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
-            _logger.LogInformation("Searching Spotify for track: {Artist} - {Track}", artistName, trackName);
+            _logger.LogInformation("Searching Spotify for track: {Artist} - {Track} (allowPartialMatch={AllowPartialMatch})", artistName, trackName, allowPartialMatch);
 
             var response = await _httpClient.GetAsync(requestUri, cancellationToken);
 
@@ -105,8 +128,17 @@ public class SpotifyApiService : ISpotifyApiService
                 return null;
             }
 
-            var spotifyTrack = searchResult.Tracks.Items.First();
-            var track = MapSpotifyTrackToEntity(spotifyTrack);
+            var spotifyTrackItem = allowPartialMatch
+                ? SelectBestSpotifyMatch(searchResult.Tracks.Items, trackName, artistName)
+                : searchResult.Tracks.Items.FirstOrDefault();
+
+            if (spotifyTrackItem == null)
+            {
+                _logger.LogInformation("No suitable Spotify track match after scoring for {Artist} - {Track}", artistName, trackName);
+                return null;
+            }
+
+            var track = MapSpotifyTrackToEntity(spotifyTrackItem);
 
             _logger.LogInformation("Found Spotify track: {SpotifyId} - {Artist} - {Track}", 
                 track.SpotifyTrackId, track.ArtistName, track.Name);
@@ -619,6 +651,111 @@ public class SpotifyApiService : ISpotifyApiService
             _logger.LogError(ex, "Error getting Spotify client credentials token");
             return null;
         }
+    }
+
+    private static SpotifyTrack? SelectBestSpotifyMatch(IEnumerable<SpotifyTrack> candidates, string trackName, string artistName)
+    {
+        var normalizedTrackQuery = NormalizeForComparison(trackName);
+        var normalizedArtistQuery = NormalizeForComparison(artistName);
+
+        SpotifyTrack? bestCandidate = null;
+        double bestScore = 0;
+
+        foreach (var candidate in candidates.Where(candidate => candidate != null))
+        {
+            var candidateTrackName = NormalizeForComparison(candidate.Name);
+            var candidateArtistNames = candidate.Artists?
+                .Select(a => NormalizeForComparison(a.Name))
+                .Where(name => !string.IsNullOrEmpty(name))
+                .ToArray() ?? Array.Empty<string>();
+
+            double score = 0;
+
+            if (!string.IsNullOrEmpty(normalizedTrackQuery) && !string.IsNullOrEmpty(candidateTrackName))
+            {
+                if (candidateTrackName.Equals(normalizedTrackQuery, StringComparison.Ordinal))
+                {
+                    score += 0.7;
+                }
+                else if (candidateTrackName.Contains(normalizedTrackQuery, StringComparison.Ordinal) ||
+                         normalizedTrackQuery.Contains(candidateTrackName, StringComparison.Ordinal))
+                {
+                    score += 0.45;
+                }
+
+                score += CalculateWordOverlap(normalizedTrackQuery, candidateTrackName) * 0.35;
+            }
+
+            if (!string.IsNullOrEmpty(normalizedArtistQuery) && candidateArtistNames.Length > 0)
+            {
+                if (candidateArtistNames.Contains(normalizedArtistQuery))
+                {
+                    score += 0.6;
+                }
+                else if (candidateArtistNames.Any(artist => normalizedArtistQuery.Contains(artist, StringComparison.Ordinal) ||
+                                                           artist.Contains(normalizedArtistQuery, StringComparison.Ordinal)))
+                {
+                    score += 0.4;
+                }
+
+                var bestArtistOverlap = candidateArtistNames
+                    .Select(artist => CalculateWordOverlap(normalizedArtistQuery, artist))
+                    .DefaultIfEmpty(0)
+                    .Max();
+
+                score += bestArtistOverlap * 0.3;
+            }
+
+            // Slightly favor more popular tracks when scores are close
+            score += Math.Min(candidate.Popularity / 100.0, 0.1);
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestCandidate = candidate;
+            }
+        }
+
+        return bestScore >= 0.4 ? bestCandidate : null;
+    }
+
+    private static string NormalizeForComparison(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(character) || char.IsWhiteSpace(character))
+            {
+                builder.Append(character);
+            }
+        }
+
+        return builder.ToString().Replace("  ", " ");
+    }
+
+    private static double CalculateWordOverlap(string left, string right)
+    {
+        if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+        {
+            return 0;
+        }
+
+        var leftWords = left.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct();
+        var rightWords = right.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct();
+
+        var union = leftWords.Union(rightWords).Count();
+        if (union == 0)
+        {
+            return 0;
+        }
+
+        var intersection = leftWords.Intersect(rightWords).Count();
+        return (double)intersection / union;
     }
 
     private static Track MapSpotifyTrackToEntity(SpotifyTrack spotifyTrack)

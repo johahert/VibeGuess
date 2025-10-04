@@ -490,21 +490,7 @@ Respond only with valid JSON in the specified format.";
 
             var quizData = JsonSerializer.Deserialize<GeneratedQuizData>(cleanedResponse, options);
             
-            // Filter out low-quality questions
-            if (quizData?.Questions != null)
-            {
-                var originalCount = quizData.Questions.Count;
-                quizData.Questions = quizData.Questions
-                    .Where(ValidateQuestionQuality)
-                    .ToList();
-                
-                var filteredCount = originalCount - quizData.Questions.Count;
-                if (filteredCount > 0)
-                {
-                    _logger.LogInformation("Filtered out {FilteredCount} low-quality questions out of {OriginalCount}", 
-                        filteredCount, originalCount);
-                }
-            }
+            // NOTE: Temporarily skip question quality filtering to retain full AI output for debugging.
 
             return quizData;
         }
@@ -539,7 +525,8 @@ Respond only with valid JSON in the specified format.";
             {
                 "Exact",
                 "Standard", 
-                "Simplified"
+                "Simplified",
+                "Fuzzy"
             };
 
             Track? spotifyTrack = null;
@@ -552,9 +539,9 @@ Respond only with valid JSON in the specified format.";
                     _logger.LogInformation("Trying search strategy '{Strategy}' for {Artist} - {Track}", strategy, artistName, trackName);
                     
                     // Apply strategy-specific modifications to search terms
-                    var (searchTrackName, searchArtistName) = ApplySearchStrategy(strategy, trackName, artistName);
+                    var (searchTrackName, searchArtistName, allowPartialMatch) = ApplySearchStrategy(strategy, trackName, artistName);
                     
-                    spotifyTrack = await _spotifyApiService.SearchTrackAsync(searchTrackName, searchArtistName);
+                    spotifyTrack = await _spotifyApiService.SearchTrackAsync(searchTrackName, searchArtistName, allowPartialMatch);
                     
                     if (spotifyTrack != null)
                     {
@@ -601,14 +588,15 @@ Respond only with valid JSON in the specified format.";
         }
     }
 
-    private (string trackName, string artistName) ApplySearchStrategy(string strategyName, string originalTrackName, string originalArtistName)
+    private (string trackName, string artistName, bool allowPartialMatch) ApplySearchStrategy(string strategyName, string originalTrackName, string originalArtistName)
     {
         return strategyName switch
         {
-            "Exact" => (originalTrackName, originalArtistName),
-            "Standard" => (originalTrackName.Trim(), originalArtistName.Trim()),
-            "Simplified" => (SimplifySearchTerm(originalTrackName), SimplifySearchTerm(originalArtistName)),
-            _ => (originalTrackName, originalArtistName)
+            "Exact" => (originalTrackName, originalArtistName, false),
+            "Standard" => (originalTrackName.Trim(), originalArtistName.Trim(), false),
+            "Simplified" => (SimplifySearchTerm(originalTrackName), SimplifySearchTerm(originalArtistName), false),
+            "Fuzzy" => (SimplifySearchTerm(originalTrackName), SimplifySearchTerm(originalArtistName), true),
+            _ => (originalTrackName, originalArtistName, false)
         };
     }
 

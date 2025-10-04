@@ -17,6 +17,16 @@ public interface ISpotifyApiService
     Task<Track?> SearchTrackAsync(string trackName, string artistName, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Searches for tracks with optional relaxed matching heuristics.
+    /// </summary>
+    /// <param name="trackName">Track name to search for.</param>
+    /// <param name="artistName">Artist name to search for.</param>
+    /// <param name="allowPartialMatch">Whether to allow relaxed fuzzy matching (broader queries, heuristics).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The best matching track or null.</returns>
+    Task<Track?> SearchTrackAsync(string trackName, string artistName, bool allowPartialMatch, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Searches for tracks on Spotify using a single query string.
     /// </summary>
     /// <param name="query">Free-form query string (track, artist, etc.).</param>
