@@ -203,16 +203,34 @@ builder.Services.AddDbContext<VibeGuessDbContext>(options =>
 // Add repositories
 builder.Services.AddRepositories();
 
-// Add Redis distributed cache for live sessions
-builder.Services.AddStackExchangeRedisCache(options =>
-{
-    options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-    options.InstanceName = "VibeGuess";
-});
+// Add Redis distributed cache for live sessions (optional for development)
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+var useRedis = !string.IsNullOrEmpty(redisConnectionString) && redisConnectionString != "disabled";
 
-// Add SignalR with Redis backplane
-builder.Services.AddSignalR()
-    .AddStackExchangeRedis(builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379");
+if (useRedis && !builder.Environment.IsDevelopment())
+{
+    // Production: Use Redis for distributed caching and SignalR backplane
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConnectionString!;
+        options.InstanceName = "VibeGuess";
+    });
+    
+    builder.Services.AddSignalR()
+        .AddStackExchangeRedis(redisConnectionString!);
+}
+else
+{
+    // Development: Use in-memory caching and single-server SignalR
+    builder.Services.AddMemoryCache();
+    builder.Services.AddDistributedMemoryCache();
+    builder.Services.AddSignalR();
+    
+    if (builder.Environment.IsDevelopment())
+    {
+        Console.WriteLine("Development mode: Using in-memory caching instead of Redis");
+    }
+}
 
 // Add live session manager
 builder.Services.AddScoped<VibeGuess.Core.Interfaces.ILiveSessionManager, VibeGuess.Infrastructure.Services.LiveSessionManager>();

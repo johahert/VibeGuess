@@ -246,16 +246,43 @@ public class LiveSessionManager : ILiveSessionManager
         return await UpdateSessionAsync(session);
     }
     
-    public async Task<bool> NextQuestionAsync(string sessionId, int questionIndex)
+    public async Task<bool> NextQuestionAsync(string sessionId, int questionIndex, QuestionData questionData)
     {
         var session = await GetSessionAsync(sessionId);
         if (session == null || session.State != LiveSessionState.Active)
         {
+            _logger.LogWarning("Cannot advance question: Session {SessionId} not found or not active", sessionId);
             return false;
         }
         
+        // Validate question data
+        if (!questionData.IsValid())
+        {
+            _logger.LogWarning("Invalid question data provided for session {SessionId}, question {QuestionIndex}", sessionId, questionIndex);
+            return false;
+        }
+        
+        // Validate question index progression
+        if (questionIndex < 0 || questionIndex < session.CurrentQuestionIndex)
+        {
+            _logger.LogWarning("Invalid question index {QuestionIndex} for session {SessionId}. Current index: {CurrentIndex}", 
+                questionIndex, sessionId, session.CurrentQuestionIndex);
+            return false;
+        }
+        
+        _logger.LogInformation("Advancing session {SessionId} to question {QuestionIndex}: {QuestionText}", 
+            sessionId, questionIndex, questionData.QuestionText);
+        
+        // Update session state
         session.CurrentQuestionIndex = questionIndex;
         session.QuestionStartTime = DateTime.UtcNow;
+        session.CurrentQuestion = questionData;
+        
+        // Override session time limit if question specifies one
+        if (questionData.TimeLimit.HasValue)
+        {
+            session.QuestionTimeLimit = questionData.TimeLimit.Value;
+        }
         
         // Reset participant question states for new question
         foreach (var participant in session.Participants)
@@ -265,6 +292,12 @@ public class LiveSessionManager : ILiveSessionManager
         }
         
         return await UpdateSessionAsync(session);
+    }
+    
+    public async Task<QuestionData?> GetCurrentQuestionAsync(string sessionId)
+    {
+        var session = await GetSessionAsync(sessionId);
+        return session?.CurrentQuestion;
     }
     
     public async Task<bool> EndGameAsync(string sessionId)
@@ -306,7 +339,7 @@ public class LiveSessionManager : ILiveSessionManager
     }
     
     // Answer Management
-    public async Task<LiveAnswer> SubmitAnswerAsync(string sessionId, string participantId, int questionIndex, string selectedAnswer, string correctAnswer)
+    public async Task<LiveAnswer> SubmitAnswerAsync(string sessionId, string participantId, int questionIndex, string selectedAnswer)
     {
         var session = await GetSessionAsync(sessionId);
         if (session == null)
@@ -318,6 +351,26 @@ public class LiveSessionManager : ILiveSessionManager
         if (participant == null)
         {
             throw new InvalidOperationException("Participant not found");
+        }
+        
+        // Validate that this is for the current question
+        if (questionIndex != session.CurrentQuestionIndex)
+        {
+            throw new InvalidOperationException("Can only submit answers for the current question");
+        }
+        
+        // Get correct answer from current question
+        var correctAnswer = session.CurrentQuestion?.CorrectAnswer;
+        if (string.IsNullOrEmpty(correctAnswer))
+        {
+            throw new InvalidOperationException("No current question or correct answer not set");
+        }
+        
+        // Validate selected answer is one of the options
+        if (session.CurrentQuestion?.Options != null && 
+            !session.CurrentQuestion.Options.Contains(selectedAnswer, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Selected answer is not a valid option");
         }
         
         // Calculate response time from question start
@@ -337,8 +390,9 @@ public class LiveSessionManager : ILiveSessionManager
             SubmittedAt = DateTime.UtcNow
         };
         
-        // Calculate scoring
-        answer.CalculateTimeBonus(session.QuestionTimeLimit);
+        // Calculate scoring with question-specific points if available
+        var questionPoints = session.CurrentQuestion?.Points ?? 100; // Default 100 points
+        answer.CalculateTimeBonus(session.QuestionTimeLimit, questionPoints);
         
         // Update participant state
         participant.HasAnsweredCurrentQuestion = true;

@@ -18,6 +18,7 @@ public class LiveQuizSession
     public int CurrentQuestionIndex { get; set; } = 0;
     public DateTime? QuestionStartTime { get; set; }
     public int QuestionTimeLimit { get; set; } = 30; // seconds
+    public QuestionData? CurrentQuestion { get; set; }
     
     public List<LiveParticipant> Participants { get; set; } = [];
     public List<LiveAnswer> Answers { get; set; } = [];

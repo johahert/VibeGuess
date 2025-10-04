@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.AspNetCore.SignalR;
 using VibeGuess.Core.Interfaces;
 using VibeGuess.Core.LiveSession;
@@ -36,6 +37,17 @@ public class HostedQuizHub : Hub
             
             _logger.LogInformation("Host {ConnectionId} created session {SessionId} with join code {JoinCode}", 
                 Context.ConnectionId, session.SessionId, session.JoinCode);
+
+            // Send host a ready notification with initial session snapshot to signal UI that connection is established
+            await Clients.Caller.SendAsync("HostSessionReady", new
+            {
+                sessionId = session.SessionId,
+                joinCode = session.JoinCode,
+                participantCount = 0,
+                status = session.State.ToString(),
+                connectionId = Context.ConnectionId,
+                timestamp = DateTime.UtcNow.ToString("O")
+            });
             
             return new { success = true, sessionId = session.SessionId, joinCode = session.JoinCode };
         }
@@ -81,33 +93,79 @@ public class HostedQuizHub : Hub
     /// <summary>
     /// Move to next question (Host only)
     /// </summary>
-    public async Task<object> NextQuestion(string sessionId, int questionIndex, object questionData)
+    public async Task<object> NextQuestion(string sessionId, int questionIndex, QuestionData questionData)
     {
         try
         {
+            // Validate authorization first
             var session = await _sessionManager.GetSessionAsync(sessionId);
             if (session == null || session.HostConnectionId != Context.ConnectionId)
             {
+                _logger.LogWarning("Unauthorized NextQuestion attempt for session {SessionId} from connection {ConnectionId}", 
+                    sessionId, Context.ConnectionId);
                 return new { success = false, error = "Unauthorized or session not found" };
             }
             
-            var success = await _sessionManager.NextQuestionAsync(sessionId, questionIndex);
+            // Validate question data
+            if (questionData == null)
+            {
+                return new { success = false, error = "Question data is required" };
+            }
+            
+            if (!questionData.IsValid())
+            {
+                _logger.LogWarning("Invalid question data provided for session {SessionId}: {QuestionText}", 
+                    sessionId, questionData.QuestionText);
+                return new { success = false, error = "Invalid question data: correct answer must be one of the provided options" };
+            }
+            
+            // Advance to the next question
+            var success = await _sessionManager.NextQuestionAsync(sessionId, questionIndex, questionData);
             if (!success)
             {
                 return new { success = false, error = "Failed to advance to next question" };
             }
             
-            // Broadcast the new question to all participants
+            // Get updated session info for broadcasting
+            var updatedSession = await _sessionManager.GetSessionAsync(sessionId);
+            if (updatedSession == null)
+            {
+                return new { success = false, error = "Session lost after update" };
+            }
+            
+            // Create participant-safe question data (without correct answer)
+            var participantQuestion = questionData.ToParticipantView();
+            
+            // Broadcast the new question to all participants (without correct answer)
             await Clients.Group(GetSessionGroup(sessionId)).SendAsync("NewQuestion", new 
             { 
                 sessionId, 
                 questionIndex, 
-                question = questionData,
-                timeLimit = session.QuestionTimeLimit
+                question = participantQuestion,
+                timeLimit = updatedSession.QuestionTimeLimit,
+                startTime = updatedSession.QuestionStartTime?.ToString("O") // ISO 8601 format
             });
             
-            _logger.LogInformation("Advanced to question {QuestionIndex} for session {SessionId}", questionIndex, sessionId);
-            return new { success = true };
+            // Send question with correct answer to host only (for answer validation)
+            await Clients.Group(GetHostGroup(sessionId)).SendAsync("QuestionStarted", new 
+            { 
+                sessionId, 
+                questionIndex, 
+                question = questionData, // Full question data including correct answer
+                timeLimit = updatedSession.QuestionTimeLimit,
+                startTime = updatedSession.QuestionStartTime?.ToString("O"),
+                participantCount = updatedSession.Participants.Count
+            });
+            
+            _logger.LogInformation("Advanced to question {QuestionIndex} for session {SessionId}: {QuestionText} (Type: {Type}, Options: {OptionCount})", 
+                questionIndex, sessionId, questionData.QuestionText, questionData.Type, questionData.Options.Count);
+                
+            return new { 
+                success = true, 
+                questionId = questionData.QuestionId,
+                timeLimit = updatedSession.QuestionTimeLimit,
+                startTime = updatedSession.QuestionStartTime?.ToString("O")
+            };
         }
         catch (Exception ex)
         {
@@ -256,20 +314,29 @@ public class HostedQuizHub : Hub
             // Get updated participant list
             var updatedParticipants = await _sessionManager.GetParticipantsAsync(session.SessionId);
             
-            // Notify host and other participants about the new participant
+            // Notify host about the new participant
             await Clients.Group(GetHostGroup(session.SessionId)).SendAsync("ParticipantJoined", new 
             { 
                 sessionId = session.SessionId,
                 participant = new { participant.ParticipantId, participant.DisplayName },
-                participantCount = updatedParticipants.Count
+                participantCount = updatedParticipants.Count,
+                source = "host"
             });
             
-            await Clients.GroupExcept(GetSessionGroup(session.SessionId), Context.ConnectionId)
+            // Notify other participants (exclude new participant and host connection to avoid duplicates on host dashboard)
+            var excludedConnections = new List<string> { Context.ConnectionId };
+            if (!string.IsNullOrEmpty(session.HostConnectionId))
+            {
+                excludedConnections.Add(session.HostConnectionId);
+            }
+            
+            await Clients.GroupExcept(GetSessionGroup(session.SessionId), excludedConnections)
                 .SendAsync("ParticipantJoined", new 
                 { 
                     sessionId = session.SessionId, 
                     participant = new { participant.ParticipantId, participant.DisplayName },
-                    participantCount = updatedParticipants.Count 
+                    participantCount = updatedParticipants.Count,
+                    source = "participant"
                 });
             
             _logger.LogInformation("Participant {DisplayName} joined session {SessionId}", displayName, session.SessionId);
@@ -318,12 +385,14 @@ public class HostedQuizHub : Hub
                 return new { success = false, error = "Already answered this question" };
             }
             
-            // For now, we'll need to get the correct answer from the quiz data
-            // This would typically come from the quiz service or be passed by the host
-            // For demo purposes, we'll mark all answers as potentially correct
-            var correctAnswer = ""; // This should be retrieved from quiz data
+            // Validate that there's a current question with valid data
+            if (session.CurrentQuestion == null)
+            {
+                return new { success = false, error = "No current question available" };
+            }
             
-            var answer = await _sessionManager.SubmitAnswerAsync(sessionId, participantId, session.CurrentQuestionIndex, selectedAnswer, correctAnswer);
+            // Submit the answer (correct answer validation happens in session manager)
+            var answer = await _sessionManager.SubmitAnswerAsync(sessionId, participantId, session.CurrentQuestionIndex, selectedAnswer);
             
             // Notify host about the answer submission
             await Clients.Group(GetHostGroup(sessionId)).SendAsync("AnswerSubmitted", new 
@@ -352,15 +421,21 @@ public class HostedQuizHub : Hub
                 })
             });
             
-            _logger.LogInformation("Answer submitted for session {SessionId}, participant {ParticipantId}, question {QuestionIndex}", 
-                sessionId, participantId, session.CurrentQuestionIndex);
+            _logger.LogInformation("Answer submitted for session {SessionId}, participant {ParticipantId}, question {QuestionIndex}: {SelectedAnswer} (Correct: {IsCorrect}, Score: {Score})", 
+                sessionId, participantId, session.CurrentQuestionIndex, selectedAnswer, answer.IsCorrect, answer.TotalScore);
             
             return new 
             { 
                 success = true, 
-                isCorrect = answer.IsCorrect, 
+                isCorrect = answer.IsCorrect,
+                selectedAnswer = answer.SelectedAnswer,
+                correctAnswer = answer.IsCorrect ? null : session.CurrentQuestion?.CorrectAnswer, // Only show correct answer if they got it wrong
                 score = answer.TotalScore,
-                totalScore = participant.Score 
+                baseScore = answer.BaseScore,
+                timeBonus = answer.TimeBonus,
+                responseTime = answer.ResponseTime.ToString(@"mm\:ss\.ff"),
+                totalScore = participant.Score,
+                explanation = session.CurrentQuestion?.Metadata?.Explanation // Show explanation if available
             };
         }
         catch (Exception ex)

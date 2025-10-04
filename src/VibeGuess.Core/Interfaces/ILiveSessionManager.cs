@@ -28,13 +28,14 @@ public interface ILiveSessionManager
     
     // Game State Management
     Task<bool> StartGameAsync(string sessionId);
-    Task<bool> NextQuestionAsync(string sessionId, int questionIndex);
+    Task<bool> NextQuestionAsync(string sessionId, int questionIndex, QuestionData questionData);
+    Task<QuestionData?> GetCurrentQuestionAsync(string sessionId);
     Task<bool> EndGameAsync(string sessionId);
     Task<bool> PauseGameAsync(string sessionId);
     Task<bool> ResumeGameAsync(string sessionId);
     
     // Answer Management
-    Task<LiveAnswer> SubmitAnswerAsync(string sessionId, string participantId, int questionIndex, string selectedAnswer, string correctAnswer);
+    Task<LiveAnswer> SubmitAnswerAsync(string sessionId, string participantId, int questionIndex, string selectedAnswer);
     Task<List<LiveAnswer>> GetAnswersForQuestionAsync(string sessionId, int questionIndex);
     Task<List<LiveAnswer>> GetParticipantAnswersAsync(string sessionId, string participantId);
     

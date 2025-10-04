@@ -22,10 +22,15 @@ public class LiveAnswer
     
     /// <summary>
     /// Calculate time bonus based on response speed
-    /// Faster responses get more bonus points (0-50 points)
+    /// Faster responses get more bonus points (0-50% of base score)
     /// </summary>
-    public void CalculateTimeBonus(int questionTimeLimitSeconds)
+    public void CalculateTimeBonus(int questionTimeLimitSeconds, int? customBaseScore = null)
     {
+        if (customBaseScore.HasValue)
+        {
+            BaseScore = customBaseScore.Value;
+        }
+        
         if (!IsCorrect)
         {
             TimeBonus = 0;
@@ -36,8 +41,8 @@ public class LiveAnswer
         var responseSeconds = ResponseTime.TotalSeconds;
         var remainingTimePercentage = Math.Max(0, (questionTimeLimitSeconds - responseSeconds) / questionTimeLimitSeconds);
         
-        // Max 50 bonus points for fastest responses
-        TimeBonus = (int)(50 * remainingTimePercentage);
+        // Max 50% of base score as bonus for fastest responses
+        TimeBonus = (int)(BaseScore * 0.5 * remainingTimePercentage);
         TotalScore = BaseScore + TimeBonus;
     }
 }
