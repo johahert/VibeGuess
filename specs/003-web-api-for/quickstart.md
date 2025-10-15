@@ -478,9 +478,3 @@ async function handleApiCall(apiFunction) {
 - **Support**: Technical support at [support@vibeguess.com](mailto:support@vibeguess.com)
 - **Community**: Developer community at [github.com/vibeguess](https://github.com/vibeguess)
 
----
-
-**🎵 Ready to create amazing music quiz experiences!**
-
-For complete API reference, visit our [full documentation](https://docs.vibeguess.com).  
-Questions? Reach out to our [developer community](https://github.com/vibeguess/community).
