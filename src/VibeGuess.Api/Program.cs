@@ -68,15 +68,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(opts =>
     opts.KnownNetworks.Clear();
     opts.KnownProxies.Clear();
 });
-    // Fallback permissive policy for development environments
-    options.AddPolicy("AllowAll", policy =>
-    {
-        policy.SetIsOriginAllowed(_ => true)
-              .AllowAnyMethod()
-              .AllowAnyHeader()
-              .AllowCredentials(); // Required for SignalR
-    });
-});
+
 
 // JWT settings
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "vibeguess";

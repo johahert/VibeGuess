@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Linq.Expressions;
 using VibeGuess.Core.Entities;
 using VibeGuess.Infrastructure.Data.Configurations;
