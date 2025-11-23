@@ -40,7 +40,7 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// CORS
+// Enhanced CORS configuration for React development and SignalR
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("ReactDevelopment", policy =>
@@ -55,7 +55,8 @@ builder.Services.AddCors(options =>
                 "https://vibeguess.on-forge.com")
               .AllowAnyMethod()
               .AllowAnyHeader()
-              .AllowCredentials();
+              .AllowCredentials()  // Required for SignalR
+              .SetPreflightMaxAge(TimeSpan.FromHours(1)); // Cache preflight responses
     });
     options.AddPolicy("AllowAll", p => p.SetIsOriginAllowed(_ => true).AllowAnyHeader().AllowAnyMethod().AllowCredentials());
 });
@@ -66,6 +67,15 @@ builder.Services.Configure<ForwardedHeadersOptions>(opts =>
     opts.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor;
     opts.KnownNetworks.Clear();
     opts.KnownProxies.Clear();
+});
+    // Fallback permissive policy for development environments
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.SetIsOriginAllowed(_ => true)
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials(); // Required for SignalR
+    });
 });
 
 // JWT settings
@@ -149,6 +159,40 @@ builder.Services.AddDbContext<VibeGuessDbContext>(options =>
 
 // Repositories & Spotify auth
 builder.Services.AddRepositories();
+
+// Add Redis distributed cache for live sessions (optional for development)
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+var useRedis = !string.IsNullOrEmpty(redisConnectionString) && redisConnectionString != "disabled";
+
+if (useRedis && !builder.Environment.IsDevelopment())
+{
+    // Production: Use Redis for distributed caching and SignalR backplane
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConnectionString!;
+        options.InstanceName = "VibeGuess";
+    });
+    
+    builder.Services.AddSignalR()
+        .AddStackExchangeRedis(redisConnectionString!);
+}
+else
+{
+    // Development: Use in-memory caching and single-server SignalR
+    builder.Services.AddMemoryCache();
+    builder.Services.AddDistributedMemoryCache();
+    builder.Services.AddSignalR();
+    
+    if (builder.Environment.IsDevelopment())
+    {
+        Console.WriteLine("Development mode: Using in-memory caching instead of Redis");
+    }
+}
+
+// Add live session manager
+builder.Services.AddScoped<VibeGuess.Core.Interfaces.ILiveSessionManager, VibeGuess.Infrastructure.Services.LiveSessionManager>();
+
+// Add authentication services
 builder.Services.AddSpotifyAuthentication(builder.Configuration);
 
 var app = builder.Build();
@@ -197,6 +241,9 @@ app.UseAuthorization();
 app.MapGet("/", () => new { status = "ok", message = "VibeGuess API", time = DateTime.UtcNow });
 app.MapGet("/health", () => new { status = "healthy", time = DateTime.UtcNow });
 app.MapControllers();
+
+// Map SignalR hubs
+app.MapHub<VibeGuess.Api.Hubs.HostedQuizHub>("/hubs/hostedquiz");
 
 // Log the configuration for debugging
 if (app.Environment.IsDevelopment())

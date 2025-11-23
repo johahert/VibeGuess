@@ -1,0 +1,194 @@
+openapi: 3.0.3
+info:
+  title: VibeGuess Hosted Quiz Sessions API
+  version: 0.1.0
+servers:
+  - url: https://api.vibeguess.local
+paths:
+  /api/hosted-sessions:
+    post:
+      summary: Create a new hosted quiz session
+      description: Host selects an existing quiz and starts a lobby with a generated join code.
+      tags: [HostedSessions]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quizId]
+              properties:
+                quizId:
+                  type: string
+                  format: uuid
+                defaultQuestionDurationSeconds:
+                  type: integer
+                  minimum: 10
+                  maximum: 120
+                  default: 30
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, joinCode, hostToken, hubUrl]
+                properties:
+                  sessionId:
+                    type: string
+                    format: uuid
+                  joinCode:
+                    type: string
+                    description: 6–8 character code players use to join
+                  hostToken:
+                    type: string
+                    description: Short-lived token granting host permissions on the SignalR hub
+                  hubUrl:
+                    type: string
+                    format: uri
+                  expiresAtUtc:
+                    type: string
+                    format: date-time
+        '404':
+          description: Quiz not found or not owned by host
+        '409':
+          description: Host already running an active session for this quiz
+  /api/hosted-sessions/{sessionId}/join:
+    post:
+      summary: Register a player in a hosted session lobby
+      tags: [HostedSessions]
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 32
+      responses:
+        '200':
+          description: Player registered and ready to connect to SignalR hub
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [participantId, displayName, playerToken, hubUrl]
+                properties:
+                  participantId:
+                    type: string
+                    format: uuid
+                  displayName:
+                    type: string
+                    description: Potentially suffixed name assigned to the player
+                  playerToken:
+                    type: string
+                    description: Token authorizing player hub connection
+                  hubUrl:
+                    type: string
+                    format: uri
+        '403':
+          description: Session not in lobby or player is blacklisted
+        '404':
+          description: Session not found or no longer active
+  /api/hosted-sessions/{sessionId}/participants/{participantId}:
+    delete:
+      summary: Remove a participant from the ongoing session and add to blacklist
+      tags: [HostedSessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+        - $ref: '#/components/parameters/participantId'
+      responses:
+        '204':
+          description: Participant removed
+        '404':
+          description: Session or participant not found
+    post:
+      summary: Reinstate a previously removed participant
+      tags: [HostedSessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+        - $ref: '#/components/parameters/participantId'
+      responses:
+        '200':
+          description: Participant reinstated and removed from blacklist
+        '409':
+          description: Participant is not currently blacklisted
+        '404':
+          description: Session or participant not found
+  /api/hosted-sessions/{sessionId}/summary:
+    get:
+      summary: Retrieve analytics after a hosted session completes
+      tags: [HostedSessions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      responses:
+        '200':
+          description: Summary payload
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, completedAtUtc, totalParticipants, averageAccuracy, podium]
+                properties:
+                  sessionId:
+                    type: string
+                    format: uuid
+                  completedAtUtc:
+                    type: string
+                    format: date-time
+                  totalParticipants:
+                    type: integer
+                  averageAccuracy:
+                    type: number
+                    format: float
+                  averageResponseTimeSeconds:
+                    type: number
+                    format: float
+                  podium:
+                    type: array
+                    items:
+                      type: object
+                      required: [displayName, score]
+                      properties:
+                        displayName:
+                          type: string
+                        score:
+                          type: integer
+        '404':
+          description: Session not found or not completed yet
+components:
+  parameters:
+    sessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    participantId:
+      name: participantId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
