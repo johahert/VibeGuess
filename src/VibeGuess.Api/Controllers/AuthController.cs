@@ -33,6 +33,10 @@ public class AuthController : BaseApiController
         _jwtService = jwtService;
     }
 
+    // Helper to safely fit strings into DB-limited columns
+    private static string? Truncate(string? value, int maxLength)
+        => string.IsNullOrEmpty(value) ? value : value.Length <= maxLength ? value : value[..maxLength];
+
     /// <summary>
     /// Initiates Spotify OAuth login flow.
     /// </summary>
@@ -183,6 +187,12 @@ public class AuthController : BaseApiController
                 // Get user profile from Spotify
                 var userProfile = await _spotifyAuth.GetUserProfileAsync(tokenResponse.AccessToken);
 
+                // Defensive clamp for DB-length columns
+                var imageUrl = Truncate(userProfile.ProfileImageUrl, 500); // Users.ProfileImageUrl nvarchar(500)
+                var displayName = Truncate(userProfile.DisplayName, 200);
+                var email = Truncate(userProfile.Email, 320);
+                var country = Truncate(userProfile.Country, 2);
+
                 // Find or create user in database
                 var user = await _unitOfWork.Users.GetBySpotifyUserIdAsync(userProfile.Id);
                 if (user == null)
@@ -190,11 +200,11 @@ public class AuthController : BaseApiController
                     user = new User
                     {
                         SpotifyUserId = userProfile.Id,
-                        DisplayName = userProfile.DisplayName,
-                        Email = userProfile.Email,
-                        Country = userProfile.Country,
+                        DisplayName = displayName ?? string.Empty,
+                        Email = email ?? string.Empty,
+                        Country = country ?? string.Empty,
                         HasSpotifyPremium = userProfile.HasPremium,
-                        ProfileImageUrl = userProfile.ProfileImageUrl,
+                        ProfileImageUrl = imageUrl,
                         LastLoginAt = DateTime.UtcNow,
                         IsActive = true,
                         Role = "User"
@@ -208,11 +218,11 @@ public class AuthController : BaseApiController
                 else
                 {
                     // Update existing user with latest profile info
-                    user.DisplayName = userProfile.DisplayName;
-                    user.Email = userProfile.Email;
-                    user.Country = userProfile.Country;
+                    user.DisplayName = displayName ?? user.DisplayName;
+                    user.Email = email ?? user.Email;
+                    user.Country = country ?? user.Country;
                     user.HasSpotifyPremium = userProfile.HasPremium;
-                    user.ProfileImageUrl = userProfile.ProfileImageUrl;
+                    user.ProfileImageUrl = imageUrl;
                     user.LastLoginAt = DateTime.UtcNow;
                     await _unitOfWork.SaveChangesAsync();
                     
