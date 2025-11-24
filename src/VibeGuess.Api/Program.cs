@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -52,6 +52,7 @@ builder.Services.AddCors(options =>
                 "https://localhost:3000",
                 "https://localhost:5173",
                 "http://127.0.0.1:8080",
+                "https://icy-flower-0635df103.3.azurestaticapps.net",
                 "https://vibeguess.on-forge.com")
               .AllowAnyMethod()
               .AllowAnyHeader()
@@ -235,7 +236,7 @@ app.MapGet("/health", () => new { status = "healthy", time = DateTime.UtcNow });
 app.MapControllers();
 
 // Map SignalR hubs
-app.MapHub<VibeGuess.Api.Hubs.HostedQuizHub>("/hubs/hostedquiz");
+app.MapHub<VibeGuess.Api.Hubs.HostedQuizHub>("/hubs/hostedquiz").RequireCors(app.Environment.IsDevelopment() ? "AllowAll" : "ReactDevelopment");
 
 // Log the configuration for debugging
 if (app.Environment.IsDevelopment())
